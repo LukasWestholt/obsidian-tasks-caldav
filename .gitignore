@@ -31,3 +31,4 @@ test-caldav-requests/
 # Test coverage reports
 coverage/
 coverage-e2e/
+obsidian-releases/
