@@ -1,28 +1,40 @@
-import { CommonTask, TaskStatus, TaskPriority, SyncChange } from './types';
-import { VTODOMapper, CalendarObject, ObsidianTask } from '../caldav/vtodoMapper';
+import { CommonTask, SyncChange } from './types';
+import { VTODOMapper, CalendarObject } from '../caldav/vtodoMapper';
 import { CalDAVClient } from '../caldav/calDAVClientDirect';
+import { IdMapping } from '../types';
 
 export class CalDAVAdapter {
   private mapper: VTODOMapper;
+  private client: CalDAVClient;
 
-  constructor(mapper?: VTODOMapper) {
+  constructor(client: CalDAVClient, mapper?: VTODOMapper) {
+    this.client = client;
     this.mapper = mapper ?? new VTODOMapper();
   }
 
   /**
-   * Normalize VTODOs into CommonTask[], using the UID mapping to resolve
+   * Full pipeline: connect → fetch → normalize → filter.
+   * SyncEngine calls this and gets back CommonTask[].
+   */
+  async fetchTasks(syncTag: string | undefined, idMapping: IdMapping): Promise<CommonTask[]> {
+    await this.client.connect();
+    const vtodos = await this.client.fetchVTODOs();
+    const allTasks = this.normalize(vtodos, idMapping);
+    return this.filterByTag(allTasks, syncTag);
+  }
+
+  /**
+   * Normalize VTODOs into CommonTask[], using IdMapping to resolve
    * CalDAV UIDs to Obsidian task IDs where a mapping exists.
    */
-  normalize(vtodos: CalendarObject[], uidMapping: Map<string, string>): CommonTask[] {
+  normalize(vtodos: CalendarObject[], idMapping: IdMapping): CommonTask[] {
     const tasks: CommonTask[] = [];
 
     for (const vtodo of vtodos) {
-      const caldavUID = this.mapper.extractUID(vtodo.data);
-      if (!caldavUID) continue;
+      const caldavUid = this.mapper.extractUID(vtodo.data);
+      if (!caldavUid) continue;
 
-      const obsidianTaskId = uidMapping.get(caldavUID);
-      const uid = obsidianTaskId ?? caldavUID;
-
+      const uid = idMapping.caldavUidToTaskId[caldavUid] ?? caldavUid;
       tasks.push(this.toCommonTask(vtodo, uid));
     }
 
@@ -36,17 +48,10 @@ export class CalDAVAdapter {
     const parsed = this.mapper.vtodoToTask(vtodo);
 
     return {
+      ...parsed,
       uid,
-      title: parsed.description,
-      status: parsed.status as TaskStatus,
-      dueDate: parsed.dueDate,
-      startDate: parsed.startDate,
-      scheduledDate: parsed.scheduledDate,
+      // Truncate completedDate to date-only (vtodo returns full datetime)
       completedDate: parsed.completedDate ? parsed.completedDate.split('T')[0] : null,
-      priority: parsed.priority as TaskPriority,
-      tags: parsed.tags,
-      recurrenceRule: parsed.recurrenceRule,
-      notes: parsed.notes,
     };
   }
 
@@ -54,47 +59,34 @@ export class CalDAVAdapter {
    * Convert a CommonTask back to a VTODO iCal string.
    */
   fromCommonTask(task: CommonTask, caldavUID: string): string {
-    const obsidianTask: ObsidianTask = {
-      description: task.title,
-      status: task.status,
-      dueDate: task.dueDate,
-      startDate: task.startDate,
-      scheduledDate: task.scheduledDate,
-      completedDate: task.completedDate,
-      priority: task.priority,
-      tags: task.tags,
-      recurrenceRule: task.recurrenceRule,
-      notes: task.notes,
-    };
-
-    return this.mapper.taskToVTODO(obsidianTask, caldavUID);
+    return this.mapper.taskToVTODO(task, caldavUID);
   }
 
   /**
    * Apply a set of sync changes to the CalDAV server.
    */
-  async applyChanges(changes: SyncChange[], client: CalDAVClient, uidMapping: Map<string, string>): Promise<void> {
+  async applyChanges(changes: SyncChange[], idMapping: IdMapping): Promise<void> {
     for (const change of changes) {
-      const caldavUID = this.resolveCaldavUID(change.task.uid, uidMapping);
+      const caldavUID = this.resolveCaldavUid(change.task.uid, idMapping);
 
       switch (change.type) {
         case 'create': {
           const vtodoData = this.fromCommonTask(change.task, caldavUID);
-          await client.createVTODO(vtodoData, caldavUID);
+          await this.client.createVTODO(vtodoData, caldavUID);
           break;
         }
         case 'update': {
-          const existing = await client.fetchVTODOByUID(caldavUID);
+          const existing = await this.client.fetchVTODOByUID(caldavUID);
           if (!existing) {
             console.error(`[CalDAVAdapter] VTODO ${caldavUID} not found for update, skipping`);
             continue;
           }
           const newData = this.fromCommonTask(change.task, caldavUID);
-          await client.updateVTODO(existing, newData);
+          await this.client.updateVTODO(existing, newData);
           break;
         }
         case 'delete': {
-          await client.deleteVTODOByUID(caldavUID);
+          await this.client.deleteVTODOByUID(caldavUID);
           break;
         }
       }
@@ -102,15 +94,20 @@ export class CalDAVAdapter {
   }
 
   /**
-   * Resolve an Obsidian task UID to the corresponding CalDAV UID.
-   * If already a CalDAV UID (not in mapping), use it directly.
+   * Filter tasks by sync tag. Only include tasks whose tags contain the sync tag.
    */
-  private resolveCaldavUID(taskUid: string, uidMapping: Map<string, string>): string {
-    // uidMapping is caldavUID -> taskId, so we need the reverse
-    for (const [caldavUID, taskId] of uidMapping.entries()) {
-      if (taskId === taskUid) return caldavUID;
-    }
-    // Not mapped — this is a new task from Obsidian, generate CalDAV UID
-    return `obsidian-${taskUid}`;
+  private filterByTag(tasks: CommonTask[], syncTag?: string): CommonTask[] {
+    if (!syncTag || syncTag.trim() === '') return tasks;
+    const tagLower = syncTag.toLowerCase().replace(/^#/, '');
+    return tasks.filter((task) =>
+      task.tags.some((tag) => tag.toLowerCase() === tagLower)
+    );
+  }
+
+  /**
+   * Resolve an Obsidian task UID to the corresponding CalDAV UID.
+   */
+  private resolveCaldavUid(taskUid: string, idMapping: IdMapping): string {
+    return idMapping.taskIdToCaldavUid[taskUid] ?? `obsidian-${taskUid}`;
   }
 }

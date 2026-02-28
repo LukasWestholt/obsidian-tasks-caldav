@@ -31,6 +31,14 @@ This is an Obsidian community plugin that provides bidirectional sync between ob
   - Wrong: "Sync With CalDAV Now", "View Sync Status"
 - See Obsidian style guide: https://help.obsidian.md/style-guide
 
+### Clean code
+- **Self-documenting** — if code needs a comment, rename the variable or extract a method instead
+- **Push logic to the edges** — filtering, ID resolution, data shaping belong in adapters and I/O layers, not the orchestrator
+- **One intent per line** — each line in an orchestrator method should express a single, clear action
+- **No inline noise** — Notice calls, counting loops, string formatting go into private helpers
+- **Methods as documentation** — `getOrSeedBaseline()` reads better than a 6-line if/else with a comment
+- **No special-case accumulation** — if you find yourself adding "also include X when Y", question whether the abstraction is right
+
 ### Linting
 - ESLint config: `eslint.config.mts` using `eslint-plugin-obsidianmd`
 - All required Obsidian lint rules must pass before submission
@@ -43,15 +51,55 @@ This is an Obsidian community plugin that provides bidirectional sync between ob
 - Entry point: `main.ts` → Output: `main.js`
 - External: `obsidian`, `electron`, `@codemirror/*`, Node.js builtins
 
+### Sync Architecture
+
+Both sides follow a symmetric **Mapper → Adapter → I/O** pattern with `CommonTask` as the shared type:
+
+```mermaid
+graph TB
+    subgraph SyncEngine["SyncEngine (orchestrator)"]
+        diff["diff()"]
+        baseline["SyncStorage (baseline)"]
+    end
+
+    subgraph Obsidian Side
+        OW["ObsidianTasksWrapper<br/><i>I/O: vault read/write, task queries</i>"]
+        OA["ObsidianAdapter<br/><i>normalize, applyChanges, writeBackIds</i>"]
+        OM["ObsidianMapper<br/><i>pure: ObsidianTask ↔ CommonTask ↔ markdown</i>"]
+    end
+
+    subgraph CalDAV Side
+        CC["CalDAVClientDirect<br/><i>I/O: HTTP PROPFIND/PUT/DELETE</i>"]
+        CA["CalDAVAdapter<br/><i>normalize, applyChanges</i>"]
+        VM["VTODOMapper<br/><i>pure: VTODO iCal ↔ CommonTask fields</i>"]
+    end
+
+    OW --> OA
+    OM --> OA
+    OA -- "CommonTask[]" --> SyncEngine
+    SyncEngine -- "SyncChange[]" --> OA
+
+    CC --> CA
+    VM --> CA
+    CA -- "CommonTask[]" --> SyncEngine
+    SyncEngine -- "SyncChange[]" --> CA
+```
+
+**Layer responsibilities:**
+- **Mapper** (pure, no I/O): Data transformation between native format and `CommonTask` fields. Stateless, fully unit-testable.
+- **Adapter** (orchestrator): Calls mapper to normalize/denormalize, manages ID resolution, applies changesets using the I/O layer.
+- **I/O** (Wrapper/Client): Raw read/write operations. `ObsidianTasksWrapper` talks to the Obsidian vault; `CalDAVClientDirect` talks to the CalDAV server via HTTP.
+
+**Sync flow:** SyncEngine fetches both sides → adapters normalize to `CommonTask[]` → `diff()` produces `SyncChange[]` → adapters apply changes → new baseline saved.
+
 ### Plugin Structure
 - `main.ts` — plugin lifecycle only (onload, onunload, commands)
-- `src/sync/` — sync engine, diff, adapters (CalDAV + Obsidian)
-- `src/caldav/` — CalDAV client, VTODO parsing
-- `src/tasks/` — task manager, obsidian-tasks integration
-- `src/storage/` — sync state persistence
+- `src/sync/` — SyncEngine, diff, adapters (CalDAV + Obsidian), types (`CommonTask`, `SyncChange`)
+- `src/caldav/` — CalDAVClientDirect (HTTP I/O), VTODOMapper (iCal parsing)
+- `src/tasks/` — ObsidianTasksWrapper (vault I/O), ObsidianMapper (markdown parsing)
+- `src/storage/` — sync state persistence (baseline, IdMapping for taskId↔caldavUid)
 - `src/ui/` — modals, settings tab
 - `src/utils/` — task ID generation, helpers
-- `src/types/` — TypeScript interfaces
 
 ### Key Patterns
 - Commands: `addCommand()` with `callback` or `editorCallback`

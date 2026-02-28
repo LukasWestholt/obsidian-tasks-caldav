@@ -1,14 +1,16 @@
 import { CalDAVClientDirect } from '../../src/caldav/calDAVClientDirect';
 import { CalDAVAdapter } from '../../src/sync/caldavAdapter';
-import { ObsidianAdapter } from '../../src/sync/obsidianAdapter';
+import { ObsidianMapper } from '../../src/tasks/obsidianMapper';
 import { diff } from '../../src/sync/diff';
 import { CommonTask } from '../../src/sync/types';
+import { IdMapping } from '../../src/types';
 import { FetchHttpClient } from '../helpers/fetchHttpClient';
 import { RADICALE, createIsolatedCalendar } from '../helpers/radicaleSetup';
 
+const emptyIdMapping: IdMapping = { taskIdToCaldavUid: {}, caldavUidToTaskId: {} };
+
 const httpClient = new FetchHttpClient();
-const caldavAdapter = new CalDAVAdapter();
-const obsidianAdapter = new ObsidianAdapter();
+const obsidianMapper = new ObsidianMapper();
 
 let calendarName: string;
 let clean: () => Promise<void>;
@@ -68,6 +70,7 @@ afterAll(async () => {
 describe('Sync round-trip E2E', () => {
   it('should detect new CalDAV tasks and produce create changes for Obsidian', async () => {
     const client = makeClient();
+    const caldavAdapter = new CalDAVAdapter(client);
     await client.connect();
 
     // Create tasks on CalDAV
@@ -78,7 +81,7 @@ describe('Sync round-trip E2E', () => {
 
     // Fetch and normalize CalDAV side
     const vtodos = await client.fetchVTODOs();
-    const caldavTasks = caldavAdapter.normalize(vtodos, new Map());
+    const caldavTasks = caldavAdapter.normalize(vtodos, emptyIdMapping);
 
     // Obsidian side: empty (simulating first sync)
     const obsidianTasks: CommonTask[] = [];
@@ -102,6 +105,7 @@ describe('Sync round-trip E2E', () => {
 
   it('should detect new Obsidian tasks and push them to CalDAV', async () => {
     const client = makeClient();
+    const caldavAdapter = new CalDAVAdapter(client);
     await client.connect();
 
     // Obsidian tasks (simulated)
@@ -117,7 +121,7 @@ describe('Sync round-trip E2E', () => {
         priority: 'high',
         tags: ['sync'],
         recurrenceRule: '',
-        notes: '',
+        body: '',
       },
     ];
 
@@ -132,13 +136,13 @@ describe('Sync round-trip E2E', () => {
     expect(changeset.toObsidian).toHaveLength(0);
 
     // Apply the changes to CalDAV
-    await caldavAdapter.applyChanges(changeset.toCalDAV, client, new Map());
+    await caldavAdapter.applyChanges(changeset.toCalDAV, emptyIdMapping);
 
     // Verify it was created on the server
     const vtodos = await client.fetchVTODOs();
     expect(vtodos.length).toBe(1);
 
-    const tasks = caldavAdapter.normalize(vtodos, new Map());
+    const tasks = caldavAdapter.normalize(vtodos, emptyIdMapping);
     expect(tasks[0].title).toBe('Task from Obsidian');
     expect(tasks[0].priority).toBe('high');
     expect(tasks[0].dueDate).toBe('2025-08-01');
@@ -146,6 +150,7 @@ describe('Sync round-trip E2E', () => {
 
   it('should detect updates on CalDAV and propagate to Obsidian', async () => {
     const client = makeClient();
+    const caldavAdapter = new CalDAVAdapter(client);
     await client.connect();
 
     const uid = `e2e-upd-${Date.now()}`;
@@ -153,7 +158,7 @@ describe('Sync round-trip E2E', () => {
 
     // Establish baseline (previous sync)
     let vtodos = await client.fetchVTODOs();
-    const baseline = caldavAdapter.normalize(vtodos, new Map());
+    const baseline = caldavAdapter.normalize(vtodos, emptyIdMapping);
 
     // Simulate CalDAV update (mark completed)
     const updatedVTODO = buildVTODO(uid, 'Original task', [
@@ -165,7 +170,7 @@ describe('Sync round-trip E2E', () => {
 
     // Re-fetch CalDAV
     vtodos = await client.fetchVTODOs();
-    const caldavTasks = caldavAdapter.normalize(vtodos, new Map());
+    const caldavTasks = caldavAdapter.normalize(vtodos, emptyIdMapping);
 
     // Obsidian still has baseline version
     const obsidianTasks = [...baseline];
@@ -181,6 +186,7 @@ describe('Sync round-trip E2E', () => {
 
   it('should detect deletes on CalDAV and propagate to Obsidian', async () => {
     const client = makeClient();
+    const caldavAdapter = new CalDAVAdapter(client);
     await client.connect();
 
     const uid = `e2e-del-${Date.now()}`;
@@ -188,14 +194,14 @@ describe('Sync round-trip E2E', () => {
 
     // Establish baseline
     let vtodos = await client.fetchVTODOs();
-    const baseline = caldavAdapter.normalize(vtodos, new Map());
+    const baseline = caldavAdapter.normalize(vtodos, emptyIdMapping);
 
     // Delete on CalDAV
     await client.deleteVTODO(vtodos[0]);
 
     // Re-fetch: empty
     vtodos = await client.fetchVTODOs();
-    const caldavTasks = caldavAdapter.normalize(vtodos, new Map());
+    const caldavTasks = caldavAdapter.normalize(vtodos, emptyIdMapping);
 
     // Obsidian still has the task
     const obsidianTasks = [...baseline];
@@ -209,6 +215,7 @@ describe('Sync round-trip E2E', () => {
 
   it('should handle conflict resolution with caldav-wins', async () => {
     const client = makeClient();
+    const caldavAdapter = new CalDAVAdapter(client);
     await client.connect();
 
     const uid = `e2e-conflict-${Date.now()}`;
@@ -216,14 +223,14 @@ describe('Sync round-trip E2E', () => {
 
     // Establish baseline
     let vtodos = await client.fetchVTODOs();
-    const baseline = caldavAdapter.normalize(vtodos, new Map());
+    const baseline = caldavAdapter.normalize(vtodos, emptyIdMapping);
 
     // CalDAV side: updated description
     const updatedVTODO = buildVTODO(uid, 'CalDAV version');
     await client.updateVTODO(vtodos[0], updatedVTODO);
 
     vtodos = await client.fetchVTODOs();
-    const caldavTasks = caldavAdapter.normalize(vtodos, new Map());
+    const caldavTasks = caldavAdapter.normalize(vtodos, emptyIdMapping);
 
     // Obsidian side: different update
     const obsidianTasks: CommonTask[] = [{
@@ -242,6 +249,7 @@ describe('Sync round-trip E2E', () => {
 
   it('should handle markdown generation from CalDAV round-trip', async () => {
     const client = makeClient();
+    const caldavAdapter = new CalDAVAdapter(client);
     await client.connect();
 
     const uid = `e2e-md-${Date.now()}`;
@@ -255,11 +263,12 @@ describe('Sync round-trip E2E', () => {
     );
 
     const vtodos = await client.fetchVTODOs();
-    const tasks = caldavAdapter.normalize(vtodos, new Map());
+    const tasks = caldavAdapter.normalize(vtodos, emptyIdMapping);
     const task = tasks[0];
 
-    // Generate Obsidian markdown
-    const markdown = obsidianAdapter.toMarkdown(task, 'test-id-123', 'sync');
+    // Generate Obsidian markdown (mapper uses task.uid for 🆔)
+    const taskWithId = { ...task, uid: 'test-id-123' };
+    const markdown = obsidianMapper.toMarkdown(taskWithId, 'sync');
 
     expect(markdown).toContain('- [ ] Test markdown gen');
     expect(markdown).toContain('🆔 test-id-123');

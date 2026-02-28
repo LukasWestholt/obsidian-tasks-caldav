@@ -1,4 +1,5 @@
-import { VTODOMapper, ObsidianTask, CalendarObject } from './vtodoMapper';
+import { VTODOMapper, CalendarObject } from './vtodoMapper';
+import { CommonTask, TaskStatus, TaskPriority } from '../sync/types';
 
 describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
   let mapper: VTODOMapper;
@@ -9,8 +10,8 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
 
   describe('taskToVTODO', () => {
     it('should generate valid iCalendar VTODO with required fields', () => {
-      const task: ObsidianTask = {
-        description: 'Test task',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Test task',
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -19,7 +20,7 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid-123');
@@ -32,8 +33,8 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
     });
 
     it('should include due date when present', () => {
-      const task: ObsidianTask = {
-        description: 'Task with due date',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Task with due date',
         status: 'TODO',
         dueDate: '2025-01-15',
         scheduledDate: null,
@@ -42,7 +43,7 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid');
@@ -51,8 +52,8 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
     });
 
     it('should include start date from scheduledDate', () => {
-      const task: ObsidianTask = {
-        description: 'Task with scheduled date',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Task with scheduled date',
         status: 'TODO',
         dueDate: null,
         scheduledDate: '2025-01-10',
@@ -61,7 +62,7 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid');
@@ -78,9 +79,9 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
       ];
 
       statuses.forEach(({ obsidian, vtodo }) => {
-        const task: ObsidianTask = {
-          description: 'Task',
-          status: obsidian,
+        const task: Omit<CommonTask, 'uid'> = {
+          title: 'Task',
+          status: obsidian as TaskStatus,
           dueDate: null,
           scheduledDate: null,
           startDate: null,
@@ -88,7 +89,7 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
           priority: 'none',
           recurrenceRule: '',
           tags: [],
-          notes: '',
+          body: '',
         };
 
         const result = mapper.taskToVTODO(task, 'test-uid');
@@ -107,17 +108,17 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
       ];
 
       priorities.forEach(({ obsidian, vtodo }) => {
-        const task: ObsidianTask = {
-          description: 'Task',
+        const task: Omit<CommonTask, 'uid'> = {
+          title: 'Task',
           status: 'TODO',
           dueDate: null,
           scheduledDate: null,
           startDate: null,
           completedDate: null,
-          priority: obsidian,
+          priority: obsidian as TaskPriority,
           recurrenceRule: '',
           tags: [],
-          notes: '',
+          body: '',
         };
 
         const result = mapper.taskToVTODO(task, 'test-uid');
@@ -126,8 +127,8 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
     });
 
     it('should include completed date and percent for completed tasks', () => {
-      const task: ObsidianTask = {
-        description: 'Completed task',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Completed task',
         status: 'DONE',
         dueDate: null,
         scheduledDate: null,
@@ -136,7 +137,7 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid');
@@ -146,8 +147,8 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
     });
 
     it('should include tags as categories', () => {
-      const task: ObsidianTask = {
-        description: 'Task with tags',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Task with tags',
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -156,7 +157,7 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
         priority: 'none',
         recurrenceRule: '',
         tags: ['work', 'urgent', 'project-a'],
-        notes: '',
+        body: '',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid');
@@ -165,8 +166,8 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
     });
 
     it('should escape special characters in summary', () => {
-      const task: ObsidianTask = {
-        description: 'Task with; comma, backslash\\ and newline\n',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Task with; comma, backslash\\ and newline\n',
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -175,7 +176,7 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid');
@@ -184,8 +185,8 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
     });
 
     it('should include recurrence rule when present', () => {
-      const task: ObsidianTask = {
-        description: 'Recurring task',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Recurring task',
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -194,7 +195,7 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
         priority: 'none',
         recurrenceRule: 'FREQ=DAILY;COUNT=10',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid');
@@ -225,7 +226,7 @@ END:VCALENDAR`;
 
       const task = mapper.vtodoToTask(vtodo);
 
-      expect(task.description).toBe('Test task');
+      expect(task.title).toBe('Test task');
       expect(task.status).toBe('TODO');
       expect(task.priority).toBe('none');
       expect(task.dueDate).toBeNull();
@@ -396,7 +397,7 @@ END:VTODO`;
 
       const task = mapper.vtodoToTask(vtodo);
 
-      expect(task.description).toBe('Untitled Task');
+      expect(task.title).toBe('Untitled Task');
     });
   });
 
@@ -436,8 +437,8 @@ END:VTODO`;
 
   describe('Special character escaping/unescaping', () => {
     it('should escape and unescape commas in task description', () => {
-      const task: ObsidianTask = {
-        description: 'Buy bread, milk, eggs',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Buy bread, milk, eggs',
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -446,7 +447,7 @@ END:VTODO`;
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       // Escape: task to VTODO
@@ -467,12 +468,12 @@ END:VTODO`;
       };
 
       const parsedTask = mapper.vtodoToTask(calendarObject);
-      expect(parsedTask.description).toBe('Buy bread, milk, eggs');
+      expect(parsedTask.title).toBe('Buy bread, milk, eggs');
     });
 
     it('should handle multiple special characters', () => {
-      const task: ObsidianTask = {
-        description: 'Task with; comma, and\\ backslash',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Task with; comma, and\\ backslash',
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -481,7 +482,7 @@ END:VTODO`;
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       // Round-trip: task → VTODO → task
@@ -494,14 +495,14 @@ END:VTODO`;
       };
 
       const parsedTask = mapper.vtodoToTask(calendarObject);
-      expect(parsedTask.description).toBe('Task with; comma, and\\ backslash');
+      expect(parsedTask.title).toBe('Task with; comma, and\\ backslash');
     });
 
     it('should prevent double-escaping on multiple syncs', () => {
       const originalDescription = 'Buy bread, milk, eggs';
 
-      const task: ObsidianTask = {
-        description: originalDescription,
+      const task: Omit<CommonTask, 'uid'> = {
+        title: originalDescription,
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -510,7 +511,7 @@ END:VTODO`;
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       // First sync: task → VTODO → task
@@ -528,14 +529,14 @@ END:VTODO`;
       const calObject3: CalendarObject = { data: vtodo3, etag: 'e3', url: 'http://test' };
       const task3 = mapper.vtodoToTask(calObject3);
 
-      expect(task1.description).toBe(originalDescription);
-      expect(task2.description).toBe(originalDescription);
-      expect(task3.description).toBe(originalDescription);
+      expect(task1.title).toBe(originalDescription);
+      expect(task2.title).toBe(originalDescription);
+      expect(task3.title).toBe(originalDescription);
     });
 
     it('should escape and unescape tags with commas', () => {
-      const task: ObsidianTask = {
-        description: 'Task',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Task',
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -544,7 +545,7 @@ END:VTODO`;
         priority: 'none',
         recurrenceRule: '',
         tags: ['home,work', 'urgent'],
-        notes: '',
+        body: '',
       };
 
       // Escape: task to VTODO
@@ -570,7 +571,7 @@ END:VTODO`;
     });
   });
 
-  describe('DESCRIPTION (notes) handling', () => {
+  describe('DESCRIPTION (body) handling', () => {
     it('should extract DESCRIPTION from VTODO', () => {
       const vtodoData = `BEGIN:VTODO
 UID:desc-test
@@ -586,7 +587,7 @@ END:VTODO`;
       };
 
       const task = mapper.vtodoToTask(vtodo);
-      expect(task.notes).toBe('Remember to check the farmers market');
+      expect(task.body).toBe('Remember to check the farmers market');
     });
 
     it('should return empty string when DESCRIPTION is missing', () => {
@@ -603,7 +604,7 @@ END:VTODO`;
       };
 
       const task = mapper.vtodoToTask(vtodo);
-      expect(task.notes).toBe('');
+      expect(task.body).toBe('');
     });
 
     it('should handle multi-line DESCRIPTION with escaped newlines', () => {
@@ -621,7 +622,7 @@ END:VTODO`;
       };
 
       const task = mapper.vtodoToTask(vtodo);
-      expect(task.notes).toBe('Line one\nLine two\nLine three');
+      expect(task.body).toBe('Line one\nLine two\nLine three');
     });
 
     it('should handle DESCRIPTION with colons', () => {
@@ -639,7 +640,7 @@ END:VTODO`;
       };
 
       const task = mapper.vtodoToTask(vtodo);
-      expect(task.notes).toBe('Meeting at 10:30 with team: discuss roadmap');
+      expect(task.body).toBe('Meeting at 10:30 with team: discuss roadmap');
     });
 
     it('should handle folded DESCRIPTION lines', () => {
@@ -652,12 +653,12 @@ END:VTODO`;
       };
 
       const task = mapper.vtodoToTask(vtodo);
-      expect(task.notes).toBe('A very long description that has been folded by the server into multiple lines');
+      expect(task.body).toBe('A very long description that has been folded by the server into multiple lines');
     });
 
-    it('should write DESCRIPTION to VTODO when notes is non-empty', () => {
-      const task: ObsidianTask = {
-        description: 'Task',
+    it('should write DESCRIPTION to VTODO when body is non-empty', () => {
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Task',
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -666,16 +667,16 @@ END:VTODO`;
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: 'Remember to bring supplies',
+        body: 'Remember to bring supplies',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid');
       expect(vtodo).toContain('DESCRIPTION:Remember to bring supplies');
     });
 
-    it('should not write DESCRIPTION when notes is empty', () => {
-      const task: ObsidianTask = {
-        description: 'Task',
+    it('should not write DESCRIPTION when body is empty', () => {
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Task',
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -684,7 +685,7 @@ END:VTODO`;
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid');
@@ -692,8 +693,8 @@ END:VTODO`;
     });
 
     it('should escape special characters in DESCRIPTION', () => {
-      const task: ObsidianTask = {
-        description: 'Task',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Task',
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -702,7 +703,7 @@ END:VTODO`;
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: 'Line 1\nLine 2; with semicolons, commas',
+        body: 'Line 1\nLine 2; with semicolons, commas',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid');
@@ -710,8 +711,8 @@ END:VTODO`;
     });
 
     it('should round-trip DESCRIPTION with special characters', () => {
-      const task: ObsidianTask = {
-        description: 'Task',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Task',
         status: 'TODO',
         dueDate: null,
         scheduledDate: null,
@@ -720,14 +721,14 @@ END:VTODO`;
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: 'Meeting at 10:30\nBring items: laptop, notebook\nNote; important',
+        body: 'Meeting at 10:30\nBring items: laptop, notebook\nNote; important',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid');
       const calObj: CalendarObject = { data: vtodo, etag: 'e1', url: 'http://test' };
       const parsed = mapper.vtodoToTask(calObj);
 
-      expect(parsed.notes).toBe('Meeting at 10:30\nBring items: laptop, notebook\nNote; important');
+      expect(parsed.body).toBe('Meeting at 10:30\nBring items: laptop, notebook\nNote; important');
     });
 
     it('should not extract DESCRIPTION from VALARM component', () => {
@@ -749,7 +750,7 @@ END:VTODO`;
       };
 
       const task = mapper.vtodoToTask(vtodo);
-      expect(task.notes).toBe('Real task notes');
+      expect(task.body).toBe('Real task notes');
     });
   });
 
@@ -757,8 +758,8 @@ END:VTODO`;
     it('should preserve date-only strings without timezone conversion', () => {
       // When we have a date string like "2026-02-11", it should remain "2026-02-11"
       // regardless of the local timezone
-      const task: ObsidianTask = {
-        description: 'Task with date',
+      const task: Omit<CommonTask, 'uid'> = {
+        title: 'Task with date',
         status: 'TODO',
         dueDate: '2026-02-11',
         scheduledDate: '2026-02-10',
@@ -767,7 +768,7 @@ END:VTODO`;
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       const vtodo = mapper.taskToVTODO(task, 'test-uid');
@@ -779,8 +780,8 @@ END:VTODO`;
 
     it('should round-trip dates without changing them', () => {
       // Create a task with a specific date
-      const originalTask: ObsidianTask = {
-        description: 'Round-trip test',
+      const originalTask: Omit<CommonTask, 'uid'> = {
+        title: 'Round-trip test',
         status: 'TODO',
         dueDate: '2026-02-11',
         scheduledDate: '2026-02-10',
@@ -789,7 +790,7 @@ END:VTODO`;
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       // Convert to VTODO and back
@@ -808,8 +809,8 @@ END:VTODO`;
 
     it('should handle dates consistently across multiple syncs', () => {
       // Simulate 3 sync cycles
-      let task: ObsidianTask = {
-        description: 'Multi-sync test',
+      let task: Omit<CommonTask, 'uid'> = {
+        title: 'Multi-sync test',
         status: 'TODO',
         dueDate: '2026-02-11',
         scheduledDate: null,
@@ -818,7 +819,7 @@ END:VTODO`;
         priority: 'none',
         recurrenceRule: '',
         tags: [],
-        notes: '',
+        body: '',
       };
 
       // Sync 1: task → VTODO → task
@@ -851,7 +852,7 @@ END:VTODO`;
       };
 
       const task = mapper.vtodoToTask(vtodo);
-      expect(task.description).toBe('Test task created by CalDAV request dumper for fixture generation.');
+      expect(task.title).toBe('Test task created by CalDAV request dumper for fixture generation.');
     });
 
     it('should unfold with LF-only line endings', () => {
@@ -864,7 +865,7 @@ END:VTODO`;
       };
 
       const task = mapper.vtodoToTask(vtodo);
-      expect(task.description).toBe('A very long task description that has been folded by the server');
+      expect(task.title).toBe('A very long task description that has been folded by the server');
     });
 
     it('should unfold with tab continuation', () => {
@@ -877,7 +878,7 @@ END:VTODO`;
       };
 
       const task = mapper.vtodoToTask(vtodo);
-      expect(task.description).toBe('Task with tabcontinuation');
+      expect(task.title).toBe('Task with tabcontinuation');
     });
 
     it('should unfold UID when extracting directly', () => {
@@ -999,7 +1000,7 @@ END:VTODO`;
       const task = mapper.vtodoToTask(vtodo);
 
       // Folded SUMMARY should be unfolded
-      expect(task.description).toBe(
+      expect(task.title).toBe(
         'Weekly grocery shopping with a very long description' +
         'that continues on the next line and needs to be' +
         'unfolded properly'
@@ -1016,7 +1017,7 @@ END:VTODO`;
       expect(task.recurrenceRule).toBe('FREQ=WEEKLY;BYDAY=SA');
 
       // Folded DESCRIPTION should be unfolded and unescaped
-      expect(task.notes).toBe(
+      expect(task.body).toBe(
         'Buy the following items from the store: bread,' +
         ' milk, eggs, cheese, and other essentials for' +
         ' the week ahead.'

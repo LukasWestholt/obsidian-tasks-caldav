@@ -1,5 +1,4 @@
 import { App, TFile } from 'obsidian';
-import { extractTaskId } from '../utils/taskIdGenerator';
 
 /**
  * Represents a task from obsidian-tasks plugin
@@ -32,6 +31,15 @@ export interface ObsidianTask {
     cancelledDate: string | { format(fmt: string): string } | null;
     recurrence: { toText(): string } | null;
     id: string;
+    /** Native serialization (obsidian-tasks ≥ 7.x). Respects user's format settings. */
+    toFileLineString?(): string;
+    /** String representation of the task. */
+    toString?(): string;
+}
+
+export interface TaskWithBody {
+    task: ObsidianTask;
+    body: string;
 }
 
 /**
@@ -45,7 +53,7 @@ export interface ObsidianTasksPlugin {
  * Manages tasks from obsidian-tasks plugin
  * Handles filtering, ID injection, and CRUD operations
  */
-export class TaskManager {
+export class ObsidianTasksWrapper {
     private app: App;
     private tasksPlugin: ObsidianTasksPlugin | null = null;
 
@@ -142,30 +150,19 @@ export class TaskManager {
     }
 
     /**
-     * Check if a task has an ID
+     * Check if a task has an ID.
+     * obsidian-tasks parses both 🆔 and [id::xxx] into task.id.
      */
     taskHasId(task: ObsidianTask): boolean {
-        // Check obsidian-tasks id field
-        if (task.id && task.id.length > 0) {
-            return true;
-        }
-
-        // Check for [id::xxx] in markdown
-        const id = extractTaskId(task.originalMarkdown);
-        return id !== null;
+        return !!task.id && task.id.length > 0;
     }
 
     /**
-     * Get task ID from task
+     * Get task ID from task.
+     * obsidian-tasks parses both 🆔 and [id::xxx] into task.id.
      */
     getTaskId(task: ObsidianTask): string | null {
-        // Check obsidian-tasks id field first
-        if (task.id && task.id.length > 0) {
-            return task.id;
-        }
-
-        // Extract from markdown
-        return extractTaskId(task.originalMarkdown);
+        return task.id && task.id.length > 0 ? task.id : null;
     }
 
     /**
@@ -314,4 +311,109 @@ export class TaskManager {
 
         return stats;
     }
+
+    /**
+     * Get all tasks paired with their body text extracted from vault files.
+     * Groups tasks by file to avoid re-reading the same file multiple times.
+     */
+    async getAllTasksWithBody(): Promise<TaskWithBody[]> {
+        return this.loadBodies(this.getAllTasks());
+    }
+
+    /**
+     * Pair tasks with their body text by reading vault files.
+     * Groups tasks by file to avoid re-reading the same file multiple times.
+     */
+    private async loadBodies(tasks: ObsidianTask[]): Promise<TaskWithBody[]> {
+        const result: TaskWithBody[] = [];
+
+        const tasksByFile = new Map<string, ObsidianTask[]>();
+        for (const task of tasks) {
+            const filePath = task.taskLocation._tasksFile._path;
+            if (!tasksByFile.has(filePath)) {
+                tasksByFile.set(filePath, []);
+            }
+            tasksByFile.get(filePath)!.push(task);
+        }
+
+        for (const [filePath, fileTasks] of tasksByFile) {
+            try {
+                const file = this.app.vault.getAbstractFileByPath(filePath);
+                if (!file || !(file instanceof TFile)) {
+                    for (const task of fileTasks) {
+                        result.push({ task, body: '' });
+                    }
+                    continue;
+                }
+                const content = await this.app.vault.read(file);
+                const lines = content.split('\n');
+
+                for (const task of fileTasks) {
+                    const lineIndex = lines.findIndex(
+                        line => line.trim() === task.originalMarkdown.trim()
+                    );
+                    if (lineIndex === -1) {
+                        result.push({ task, body: '' });
+                        continue;
+                    }
+
+                    const body = this.extractBodyFromFile(content, lineIndex);
+                    result.push({ task, body });
+                }
+            } catch (error) {
+                console.error(`[ObsidianTasksWrapper] Failed to read file for body: ${filePath}`, error);
+                for (const task of fileTasks) {
+                    result.push({ task, body: '' });
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Filter task inputs by sync tag.
+     * Keeps only tasks whose tags include the given sync tag (case-insensitive).
+     * Returns all inputs when syncTag is empty or undefined.
+     */
+    filterByTag(inputs: TaskWithBody[], syncTag?: string): TaskWithBody[] {
+        if (!syncTag || syncTag.trim() === '') return inputs;
+
+        const tagLower = syncTag.toLowerCase().replace(/^#/, '');
+        return inputs.filter(({ task }) => {
+            if (!task.tags || task.tags.length === 0) return false;
+            return task.tags.some((tag: string) =>
+                tag.toLowerCase().replace(/^#/, '') === tagLower
+            );
+        });
+    }
+
+    /**
+     * Extract indented bullet body from file content below a task line.
+     * Body lines match /^(?:\s{2,}|\t)- (.*)$/ immediately after the task.
+     * Returns joined lines with \n, or '' if no body found.
+     */
+    extractBodyFromFile(fileContent: string, taskLineIndex: number): string {
+        const lines = fileContent.split('\n');
+        const noteLines: string[] = [];
+
+        for (let i = taskLineIndex + 1; i < lines.length; i++) {
+            const match = lines[i].match(/^(?:\s{2,}|\t)- (.*)$/);
+            if (!match) break;
+            noteLines.push(match[1]);
+        }
+
+        return noteLines.join('\n');
+    }
+
+    /**
+     * Extract task ID from an obsidian-tasks Task.
+     * Only checks the task.id field populated by obsidian-tasks
+     * for both 🆔 and [id::] formats.
+     */
+    extractId(task: ObsidianTask): string | null {
+        if (task.id && task.id.length > 0) return task.id;
+        return null;
+    }
+
 }

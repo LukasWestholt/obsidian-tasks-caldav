@@ -29,19 +29,10 @@ export const DEFAULT_CALDAV_SETTINGS: CalDAVSettings = {
   deleteBehavior: 'ask'
 };
 
-// Task mapping
-export interface TaskMapping {
-  caldavUID: string;
-  sourceFile: string;
-  lastSyncedObsidian: string;
-  lastSyncedCalDAV: string;
-  lastModifiedObsidian: string;
-  lastModifiedCalDAV: string;
-}
-
-export interface MappingData {
-  tasks: Record<string, TaskMapping>; // taskId -> mapping
-  caldavToTask: Record<string, string>; // caldavUID -> taskId
+/** Lean bidirectional identity mapping between Obsidian task IDs and CalDAV UIDs. */
+export interface IdMapping {
+  taskIdToCaldavUid: Record<string, string>;
+  caldavUidToTaskId: Record<string, string>;
 }
 
 // Conflict info

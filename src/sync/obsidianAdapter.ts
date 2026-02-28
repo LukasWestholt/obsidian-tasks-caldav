@@ -1,244 +1,173 @@
-import { RRule } from 'rrule';
-import { CommonTask, TaskStatus, TaskPriority } from './types';
-import { ObsidianTask } from '../tasks/taskManager';
-import { generateTaskId } from '../utils/taskIdGenerator';
+import { CommonTask, SyncChange } from "./types";
+import {
+	ObsidianTask,
+	TaskWithBody,
+	ObsidianTasksWrapper,
+} from "../tasks/obsidianTasksWrapper";
+import { ObsidianMapper } from "../tasks/obsidianMapper";
+import { generateTaskId } from "../utils/taskIdGenerator";
 
-export interface TaskWithNotes {
-  task: ObsidianTask;
-  notes: string;
-}
+export type { TaskWithBody } from "../tasks/obsidianTasksWrapper";
 
-export interface NormalizeResult {
-  tasks: CommonTask[];
-  tasksById: Map<string, ObsidianTask>;
+export interface ObsidianSyncSettings {
+	syncTag?: string;
+	newTasksDestination: string;
+	newTasksSection?: string;
 }
 
 export class ObsidianAdapter {
-  /**
-   * Normalize obsidian-tasks Task[] into CommonTask[].
-   * Filters by sync tag, generates in-memory IDs for tasks without one.
-   * Returns both the normalized tasks and a map from uid → original ObsidianTask.
-   */
-  normalize(taskInputs: TaskWithNotes[], syncTag?: string): NormalizeResult {
-    const filtered = this.filterByTag(taskInputs, syncTag);
-    const tasks: CommonTask[] = [];
-    const tasksById = new Map<string, ObsidianTask>();
+	private mapper: ObsidianMapper;
+	private wrapper: ObsidianTasksWrapper;
+	private settings: ObsidianSyncSettings;
+	private tasksById = new Map<string, ObsidianTask>();
 
-    for (const { task, notes } of filtered) {
-      let taskId = this.extractId(task);
-      if (!taskId) {
-        taskId = generateTaskId();
-      }
-      tasksById.set(taskId, task);
-      tasks.push(this.toCommonTask(task, taskId, notes));
-    }
+	constructor(
+		wrapper: ObsidianTasksWrapper,
+		settings: ObsidianSyncSettings,
+		mapper?: ObsidianMapper,
+	) {
+		this.wrapper = wrapper;
+		this.settings = settings;
+		this.mapper = mapper ?? new ObsidianMapper();
+	}
 
-    return { tasks, tasksById };
-  }
+	isReady(): boolean {
+		return this.wrapper.initialize();
+	}
 
-  /**
-   * Convert a single obsidian-tasks Task to CommonTask.
-   * @param notes Optional notes text (defaults to '')
-   */
-  toCommonTask(task: ObsidianTask, taskId: string, notes: string = ''): CommonTask {
-    return {
-      uid: taskId,
-      title: this.cleanDescription(task.description),
-      status: this.mapStatus(task),
-      dueDate: this.formatDate(task.dueDate),
-      startDate: this.formatDate(task.startDate),
-      scheduledDate: this.formatDate(task.scheduledDate),
-      completedDate: this.formatDate(task.doneDate),
-      priority: this.mapPriority(task.priority),
-      tags: this.cleanTags(task.tags || []),
-      recurrenceRule: task.recurrence ? this.extractRecurrenceRule(task.recurrence) : '',
-      notes,
-    };
-  }
+	async fetchTasks(syncTag?: string): Promise<CommonTask[]> {
+		const allInputs = await this.wrapper.getAllTasksWithBody();
+		const filtered = this.wrapper.filterByTag(allInputs, syncTag);
+		return this.normalize(
+			filtered,
+			(task) => this.wrapper.extractId(task),
+		);
+	}
 
-  /**
-   * Generate obsidian-tasks markdown from a CommonTask.
-   */
-  toMarkdown(task: CommonTask, taskId: string, syncTag?: string): string {
-    let line = task.status === 'DONE' ? '- [x] ' : '- [ ] ';
+	/**
+	 * Normalize pre-filtered TaskWithBody[] into CommonTask[].
+	 * Assigns IDs internally: uses existing ID from extractId, or generates
+	 * an in-memory ID via generateTaskId(). Stores the ID→ObsidianTask
+	 * mapping internally for use by applyChanges/writeBackIds.
+	 */
+	normalize(
+		inputs: TaskWithBody[],
+		extractId: (task: ObsidianTask) => string | null,
+	): CommonTask[] {
+		const tasks: CommonTask[] = [];
+		this.tasksById = new Map();
 
-    line += task.title;
+		for (const { task, body } of inputs) {
+			const taskId = extractId(task) ?? generateTaskId();
+			this.tasksById.set(taskId, task);
+			tasks.push(this.mapper.toCommonTask(task, taskId, body));
+		}
 
-    // Dates in obsidian-tasks order: start, scheduled, due, completed
-    if (task.startDate) {
-      line += ` 🛫 ${task.startDate}`;
-    }
-    if (task.scheduledDate) {
-      line += ` ⏳ ${task.scheduledDate}`;
-    }
-    if (task.dueDate) {
-      line += ` 📅 ${task.dueDate}`;
-    }
-    if (task.completedDate) {
-      line += ` ✅ ${task.completedDate}`;
-    }
+		return tasks;
+	}
 
-    // Recurrence rule in obsidian-tasks format
-    if (task.recurrenceRule) {
-      const text = this.rruleToText(task.recurrenceRule);
-      if (text) {
-        line += ` 🔁 ${text}`;
-      }
-    }
+	/**
+	 * Apply sync changes to the Obsidian vault (creates, updates, deletes).
+	 */
+	async applyChanges(
+		changes: SyncChange[],
+	): Promise<Array<{ taskId: string; caldavUID: string }>> {
+		const createdMappings: Array<{
+			taskId: string;
+			caldavUID: string;
+		}> = [];
 
-    // Task ID in obsidian-tasks emoji format
-    line += ` 🆔 ${taskId}`;
+		for (const change of changes) {
+			try {
+				switch (change.type) {
+					case "create": {
+						const taskId = generateTaskId();
+						const taskWithId: CommonTask = {
+							...change.task,
+							uid: taskId,
+						};
+						const markdown = this.mapper.toMarkdown(
+							taskWithId,
+							this.settings.syncTag,
+						);
 
-    // Sync tag after ID
-    if (syncTag && syncTag.trim() !== '') {
-      const tag = syncTag.startsWith('#') ? syncTag : `#${syncTag}`;
-      line += ` ${tag}`;
-    }
+						await this.wrapper.createTask(
+							markdown,
+							this.settings.newTasksDestination,
+							this.settings.newTasksSection,
+						);
 
-    // Notes as indented bullet lines
-    if (task.notes) {
-      const noteLines = task.notes.split('\n').map(l => `    - ${l}`);
-      line += '\n' + noteLines.join('\n');
-    }
+						createdMappings.push({
+							taskId,
+							caldavUID: change.task.uid,
+						});
+						break;
+					}
 
-    return line;
-  }
+					case "update": {
+						const existingTask =
+							this.tasksById.get(change.task.uid) ??
+							this.wrapper.findTaskById(change.task.uid);
+						if (!existingTask) continue;
 
-  /**
-   * Extract indented bullet notes from file content below a task line.
-   * Notes are lines matching /^(?:\s{2,}|\t)- (.*)$/ immediately after the task.
-   * Returns joined lines with \n, or '' if no notes found.
-   */
-  extractNotesFromFile(fileContent: string, taskLineIndex: number): string {
-    const lines = fileContent.split('\n');
-    const noteLines: string[] = [];
+						const markdown = this.mapper.toMarkdown(
+							change.task,
+							this.settings.syncTag,
+						);
+						await this.wrapper.updateTaskInVault(
+							existingTask,
+							markdown,
+						);
+						break;
+					}
 
-    for (let i = taskLineIndex + 1; i < lines.length; i++) {
-      const match = lines[i].match(/^(?:\s{2,}|\t)- (.*)$/);
-      if (!match) break;
-      noteLines.push(match[1]);
-    }
+					case "delete": {
+						// Return mapping removal info — SyncEngine handles storage
+						break;
+					}
+				}
+			} catch (error) {
+				console.error(
+					`Failed to apply ${change.type} for task ${change.task.uid}:`,
+					error,
+				);
+			}
+		}
 
-    return noteLines.join('\n');
-  }
+		return createdMappings;
+	}
 
-  /**
-   * Get the content hash for change detection (matches old SyncEngine behavior).
-   */
-  getContentHash(task: ObsidianTask): string {
-    return task.originalMarkdown.trim();
-  }
+	/**
+	 * Write IDs back to vault for tasks that had in-memory IDs generated during normalize.
+	 * Only called after sync succeeds, so IDs are only persisted when sync completes.
+	 */
+	async writeBackIds(obsidianTasks: CommonTask[]): Promise<void> {
+		for (const task of obsidianTasks) {
+			const original = this.tasksById.get(task.uid);
+			if (!original) continue;
+			// Only write back if the original task had no ID
+			if (this.wrapper.extractId(original)) continue;
 
-  /**
-   * Extract task ID from an obsidian-tasks Task.
-   * obsidian-tasks populates task.id for both 🆔 and [id::] formats.
-   */
-  extractId(task: ObsidianTask): string | null {
-    if (task.id && task.id.length > 0) return task.id;
-    return null;
-  }
+			try {
+				const markdown = this.mapper.toMarkdown(
+					task,
+					this.settings.syncTag,
+				);
+				await this.wrapper.updateTaskInVault(original, markdown);
+			} catch (error) {
+				console.error(
+					`[ObsidianAdapter] Failed to write back ID for task ${task.uid}:`,
+					error,
+				);
+			}
+		}
+	}
 
-  /**
-   * Clean description by removing metadata that belongs in other fields.
-   * obsidian-tasks already strips 🆔 from description. This handles
-   * [id::xxx] for backwards compat and #tags.
-   */
-  private cleanDescription(description: string): string {
-    let cleaned = description;
-
-    // Remove [id::xxx] (backwards compat for tasks indexed before migration)
-    cleaned = cleaned.replace(/\[id::[^\]]+\]/g, '');
-    // Remove hashtags (but not # followed by numbers like #42)
-    cleaned = cleaned.replace(/#[a-zA-Z][\w-]*/g, '');
-    // Clean up extra whitespace
-    cleaned = cleaned.replace(/\s+/g, ' ').trim();
-
-    return cleaned;
-  }
-
-  /**
-   * Remove # prefix from tags.
-   */
-  private cleanTags(tags: string[]): string[] {
-    return tags.map(tag => tag.replace(/^#/, ''));
-  }
-
-  /**
-   * Map obsidian-tasks status to TaskStatus.
-   */
-  private mapStatus(task: ObsidianTask): TaskStatus {
-    if (task.isDone) return 'DONE';
-    return 'TODO';
-  }
-
-  /**
-   * Map obsidian-tasks priority (1-6) to TaskPriority.
-   */
-  private mapPriority(priority: string): TaskPriority {
-    const map: Record<string, TaskPriority> = {
-      '1': 'highest',
-      '2': 'high',
-      '3': 'medium',
-      '4': 'medium',
-      '5': 'low',
-      '6': 'lowest',
-    };
-    return map[priority] || 'none';
-  }
-
-  /**
-   * Extract RRULE string from obsidian-tasks Recurrence object.
-   * Uses rrule.js to parse the human-readable text from toText(),
-   * avoiding access to obsidian-tasks private properties.
-   */
-  private extractRecurrenceRule(recurrence: { toText(): string }): string {
-    try {
-      const text = recurrence.toText();
-      if (!text) return '';
-      // Strip "when done" suffix — obsidian-tasks specific, not part of RRULE
-      const cleanText = text.replace(/\s+when\s+done\s*$/i, '');
-      const rule = RRule.fromText(cleanText);
-      return rule.toString().replace(/^RRULE:/, '');
-    } catch {
-      return '';
-    }
-  }
-
-  /**
-   * Convert an RRULE string (e.g. "FREQ=DAILY") to obsidian-tasks
-   * human-readable format (e.g. "every day").
-   */
-  private rruleToText(rruleStr: string): string {
-    try {
-      const rule = RRule.fromString(`RRULE:${rruleStr}`);
-      return rule.toText();
-    } catch {
-      return '';
-    }
-  }
-
-  /**
-   * Format obsidian-tasks date (moment-like with .format()) to YYYY-MM-DD string.
-   */
-  private formatDate(date: string | { format(fmt: string): string } | null | undefined): string | null {
-    if (!date) return null;
-    if (typeof date === 'string') return date;
-    if (typeof date.format === 'function') return date.format('YYYY-MM-DD');
-    return null;
-  }
-
-  /**
-   * Filter tasks by sync tag.
-   */
-  private filterByTag(inputs: TaskWithNotes[], syncTag?: string): TaskWithNotes[] {
-    if (!syncTag || syncTag.trim() === '') return inputs;
-
-    const tagLower = syncTag.toLowerCase().replace(/^#/, '');
-    return inputs.filter(({ task }) => {
-      if (!task.tags || task.tags.length === 0) return false;
-      return task.tags.some((tag: string) =>
-        tag.toLowerCase().replace(/^#/, '') === tagLower
-      );
-    });
-  }
+	/**
+	 * Look up the original ObsidianTask by its assigned ID.
+	 * Used by SyncEngine for mapping resolution after sync.
+	 */
+	findOriginalTask(uid: string): ObsidianTask | undefined {
+		return this.tasksById.get(uid);
+	}
 }
