@@ -69,11 +69,11 @@ export class SyncEngine {
 
 			if (dryRun) return this.buildResult(changeset, obsidianTasks, caldavTasks, baseline, true);
 
-			const createdMappings = await this.obsidianAdapter.applyChanges(changeset.toObsidian);
+			const { createdMappings, completionRemappings } = await this.obsidianAdapter.applyChanges(changeset.toObsidian);
 			await this.caldavAdapter.applyChanges(changeset.toCalDAV, idMapping);
 			await this.obsidianAdapter.writeBackIds(obsidianTasks);
 
-			this.updateIdMapping(idMapping, createdMappings, changeset);
+			this.updateIdMapping(idMapping, createdMappings, completionRemappings, changeset);
 			this.persistState(obsidianTasks, caldavTasks, changeset, idMapping);
 			await this.storage.save();
 
@@ -140,11 +140,22 @@ export class SyncEngine {
 	private updateIdMapping(
 		idMapping: IdMapping,
 		createdMappings: Array<{ taskId: string; caldavUID: string }>,
+		completionRemappings: Array<{ oldTaskId: string; newTaskId: string }>,
 		changeset: { toObsidian: SyncChange[]; toCalDAV: SyncChange[] },
 	): void {
 		for (const { taskId, caldavUID } of createdMappings) {
 			idMapping.taskIdToCaldavUid[taskId] = caldavUID;
 			idMapping.caldavUidToTaskId[caldavUID] = taskId;
+		}
+
+		for (const { oldTaskId, newTaskId } of completionRemappings) {
+			const caldavUID = idMapping.taskIdToCaldavUid[oldTaskId];
+			if (caldavUID) {
+				delete idMapping.taskIdToCaldavUid[oldTaskId];
+				delete idMapping.caldavUidToTaskId[caldavUID];
+				idMapping.taskIdToCaldavUid[newTaskId] = caldavUID;
+				idMapping.caldavUidToTaskId[caldavUID] = newTaskId;
+			}
 		}
 
 		for (const change of changeset.toCalDAV) {
@@ -201,7 +212,7 @@ export class SyncEngine {
 		}
 
 		for (const change of [...changeset.toObsidian, ...changeset.toCalDAV]) {
-			if (change.type === "create" || change.type === "update") {
+			if (change.type === "create" || change.type === "update" || change.type === "complete") {
 				baselineMap.set(change.task.uid, change.task);
 			} else if (change.type === "delete") {
 				baselineMap.delete(change.task.uid);
@@ -257,7 +268,10 @@ export class SyncEngine {
 
 		return {
 			created: { toObsidian: count(changeset.toObsidian, "create"), toCalDAV: count(changeset.toCalDAV, "create") },
-			updated: { toObsidian: count(changeset.toObsidian, "update"), toCalDAV: count(changeset.toCalDAV, "update") },
+			updated: {
+				toObsidian: count(changeset.toObsidian, "update") + count(changeset.toObsidian, "complete"),
+				toCalDAV: count(changeset.toCalDAV, "update") + count(changeset.toCalDAV, "complete"),
+			},
 			deleted: { toObsidian: count(changeset.toObsidian, "delete"), toCalDAV: count(changeset.toCalDAV, "delete") },
 		};
 	}
