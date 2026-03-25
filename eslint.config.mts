@@ -29,6 +29,12 @@ export default tseslint.config(
 			"obsidianmd/ui/sentence-case": ["error", {
 				mode: "strict",
 			}],
+		},
+	},
+	{
+		files: ["**/*.ts"],
+		plugins: { "@typescript-eslint": tseslint.plugin },
+		rules: {
 			"@typescript-eslint/require-await": "error",
 		},
 	},

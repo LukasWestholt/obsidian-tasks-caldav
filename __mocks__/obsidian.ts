@@ -46,7 +46,7 @@ export class Plugin {
     manifest: Record<string, unknown> = {};
 
     async loadData(): Promise<unknown> {
-        return {};
+        return await Promise.resolve({});
     }
 
     async saveData(_data: unknown): Promise<void> {
