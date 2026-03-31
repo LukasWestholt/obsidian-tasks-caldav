@@ -7,7 +7,7 @@ on:
     branches: [master]
 
 jobs:
-  test:
+  lint-and-typecheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,13 +25,106 @@ jobs:
       - name: Type check
         run: tsc -noEmit -skipLibCheck
 
-      - name: Tests with coverage
-        run: npm test
+  test-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Upload coverage
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Cache Radicale image
+        id: cache-radicale
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-cache/radicale.tar
+          key: docker-radicale-${{ hashFiles('docker-compose.yml') }}
+
+      - name: Load or pull Radicale image
+        run: |
+          mkdir -p /tmp/docker-cache
+          if [ "${{ steps.cache-radicale.outputs.cache-hit }}" = "true" ]; then
+            docker load -i /tmp/docker-cache/radicale.tar
+          else
+            docker pull tomsquest/docker-radicale
+            docker save tomsquest/docker-radicale -o /tmp/docker-cache/radicale.tar
+          fi
+
+      - name: Unit + Radicale E2E tests with coverage
+        run: npm run test:core
+
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
           name: coverage
           path: coverage/
           retention-days: 14
+
+  test-e2e-vikunja:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Cache Vikunja image
+        id: cache-vikunja
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-cache/vikunja.tar
+          key: docker-vikunja-${{ hashFiles('docker-compose.yml') }}
+
+      - name: Load or pull Vikunja image
+        run: |
+          mkdir -p /tmp/docker-cache
+          if [ "${{ steps.cache-vikunja.outputs.cache-hit }}" = "true" ]; then
+            docker load -i /tmp/docker-cache/vikunja.tar
+          else
+            docker pull vikunja/vikunja
+            docker save vikunja/vikunja -o /tmp/docker-cache/vikunja.tar
+          fi
+
+      - name: E2E tests (Vikunja)
+        run: npm run test:e2e:vikunja
+
+  test-e2e-nextcloud:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Cache Nextcloud image
+        id: cache-nextcloud
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-cache/nextcloud.tar
+          key: docker-nextcloud-${{ hashFiles('docker-compose.yml') }}
+
+      - name: Load or pull Nextcloud image
+        run: |
+          mkdir -p /tmp/docker-cache
+          if [ "${{ steps.cache-nextcloud.outputs.cache-hit }}" = "true" ]; then
+            docker load -i /tmp/docker-cache/nextcloud.tar
+          else
+            docker pull nextcloud:stable-apache
+            docker save nextcloud:stable-apache -o /tmp/docker-cache/nextcloud.tar
+          fi
+
+      - name: E2E tests (Nextcloud)
+        run: npm run test:e2e:nextcloud
