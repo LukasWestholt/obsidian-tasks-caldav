@@ -202,6 +202,51 @@ describe('VTODOMapper - pure functions for VTODO<->Task conversion', () => {
 
       expect(vtodo).toContain('RRULE:FREQ=DAILY;COUNT=10');
     });
+
+    describe('obsidian link embedding', () => {
+      const baseTask: Omit<CommonTask, 'uid'> = {
+        title: 'Test task',
+        status: 'TODO' as TaskStatus,
+        dueDate: null,
+        startDate: null,
+        scheduledDate: null,
+        completedDate: null,
+        priority: 'none' as TaskPriority,
+        tags: [],
+        recurrenceRule: '',
+        body: '',
+      };
+
+      it('should add URL property when obsidianUrl is set', () => {
+        const task = { ...baseTask, obsidianUrl: 'obsidian://open?vault=Notes&file=Tasks.md' };
+        const vtodo = mapper.taskToVTODO(task, 'url-test-1');
+        expect(vtodo).toContain('URL:obsidian://open?vault=Notes&file=Tasks.md');
+      });
+
+      it('should prepend obsidian link to DESCRIPTION when obsidianUrl is set and body exists', () => {
+        const task = { ...baseTask, obsidianUrl: 'obsidian://open?vault=Notes&file=Tasks.md', body: 'My notes' };
+        const vtodo = mapper.taskToVTODO(task, 'url-test-2');
+        expect(vtodo).toContain('DESCRIPTION:obsidian://open?vault=Notes&file=Tasks.md\\n\\nMy notes');
+      });
+
+      it('should set DESCRIPTION to obsidian link when obsidianUrl is set and body is empty', () => {
+        const task = { ...baseTask, obsidianUrl: 'obsidian://open?vault=Notes&file=Tasks.md', body: '' };
+        const vtodo = mapper.taskToVTODO(task, 'url-test-3');
+        expect(vtodo).toContain('DESCRIPTION:obsidian://open?vault=Notes&file=Tasks.md');
+        expect(vtodo).not.toContain('DESCRIPTION:obsidian://open?vault=Notes&file=Tasks.md\\n');
+      });
+
+      it('should not add URL property when obsidianUrl is not set', () => {
+        const vtodo = mapper.taskToVTODO(baseTask, 'url-test-4');
+        expect(vtodo).not.toMatch(/^URL:/m);
+      });
+
+      it('should handle obsidianUrl with encoded characters', () => {
+        const task = { ...baseTask, obsidianUrl: 'obsidian://open?vault=My%20Vault&file=Projects%2Ftodo.md' };
+        const vtodo = mapper.taskToVTODO(task, 'url-test-5');
+        expect(vtodo).toContain('URL:obsidian://open?vault=My%20Vault&file=Projects%2Ftodo.md');
+      });
+    });
   });
 
   describe('vtodoToTask', () => {
@@ -1090,6 +1135,158 @@ END:VTODO`;
       const task2 = mapper.vtodoToTask({ data: vtodoOut, etag: 'e2', url: 'http://test' });
       expect(task2.dueDate).toBe('2026-03-15');
       expect(task2.startDate).toBe('2026-03-10');
+    });
+  });
+
+  describe('obsidian link stripping', () => {
+    it('should strip obsidian:// link from first line of DESCRIPTION', () => {
+      const vtodo: CalendarObject = {
+        url: '/cal/test.ics',
+        data: [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VTODO',
+          'UID:strip-test-1',
+          'SUMMARY:Test task',
+          'DESCRIPTION:obsidian://open?vault=Notes&file=Tasks.md\\nActual body text',
+          'STATUS:NEEDS-ACTION',
+          'END:VTODO',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+      };
+
+      const result = mapper.vtodoToTask(vtodo);
+      expect(result.body).toBe('Actual body text');
+    });
+
+    it('should strip obsidian:// link followed by blank line', () => {
+      const vtodo: CalendarObject = {
+        url: '/cal/test.ics',
+        data: [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VTODO',
+          'UID:strip-test-2',
+          'SUMMARY:Test task',
+          'DESCRIPTION:obsidian://open?vault=My%20Vault&file=Projects%2Ftasks.md\\n\\nReal body here',
+          'STATUS:NEEDS-ACTION',
+          'END:VTODO',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+      };
+
+      const result = mapper.vtodoToTask(vtodo);
+      expect(result.body).toBe('Real body here');
+    });
+
+    it('should return empty body when DESCRIPTION is only an obsidian link', () => {
+      const vtodo: CalendarObject = {
+        url: '/cal/test.ics',
+        data: [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VTODO',
+          'UID:strip-test-3',
+          'SUMMARY:Test task',
+          'DESCRIPTION:obsidian://open?vault=Notes&file=Tasks.md',
+          'STATUS:NEEDS-ACTION',
+          'END:VTODO',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+      };
+
+      const result = mapper.vtodoToTask(vtodo);
+      expect(result.body).toBe('');
+    });
+
+    it('should not strip obsidian links that are not at start of a line', () => {
+      const vtodo: CalendarObject = {
+        url: '/cal/test.ics',
+        data: [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VTODO',
+          'UID:strip-test-4',
+          'SUMMARY:Test task',
+          'DESCRIPTION:See obsidian://open?vault=Notes&file=Tasks.md for details',
+          'STATUS:NEEDS-ACTION',
+          'END:VTODO',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+      };
+
+      const result = mapper.vtodoToTask(vtodo);
+      expect(result.body).toBe('See obsidian://open?vault=Notes&file=Tasks.md for details');
+    });
+
+    it('should preserve body without obsidian links unchanged', () => {
+      const vtodo: CalendarObject = {
+        url: '/cal/test.ics',
+        data: [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VTODO',
+          'UID:strip-test-5',
+          'SUMMARY:Test task',
+          'DESCRIPTION:Just a normal body',
+          'STATUS:NEEDS-ACTION',
+          'END:VTODO',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+      };
+
+      const result = mapper.vtodoToTask(vtodo);
+      expect(result.body).toBe('Just a normal body');
+    });
+  });
+
+  describe('obsidian link round-trip', () => {
+    it('should survive round-trip: body with link outbound, stripped inbound', () => {
+      const originalBody = 'Meeting notes from standup';
+      const obsidianUrl = 'obsidian://open?vault=Work&file=Meetings%2Fstandup.md';
+
+      const outboundTask: Omit<CommonTask, 'uid'> = {
+        title: 'Review standup notes',
+        status: 'TODO' as TaskStatus,
+        dueDate: null,
+        startDate: null,
+        scheduledDate: null,
+        completedDate: null,
+        priority: 'none' as TaskPriority,
+        tags: [],
+        recurrenceRule: '',
+        body: originalBody,
+        obsidianUrl,
+      };
+
+      const vtodoString = mapper.taskToVTODO(outboundTask, 'roundtrip-1');
+
+      expect(vtodoString).toContain('URL:obsidian://open?vault=Work&file=Meetings%2Fstandup.md');
+      expect(vtodoString).toMatch(/DESCRIPTION:.*obsidian:\/\/open/);
+
+      const vtodo: CalendarObject = { url: '/cal/roundtrip.ics', data: vtodoString };
+      const parsed = mapper.vtodoToTask(vtodo);
+
+      expect(parsed.body).toBe(originalBody);
+    });
+
+    it('should survive round-trip with empty body', () => {
+      const obsidianUrl = 'obsidian://open?vault=Notes&file=Tasks.md';
+
+      const outboundTask: Omit<CommonTask, 'uid'> = {
+        title: 'Simple task',
+        status: 'TODO' as TaskStatus,
+        dueDate: null,
+        startDate: null,
+        scheduledDate: null,
+        completedDate: null,
+        priority: 'none' as TaskPriority,
+        tags: [],
+        recurrenceRule: '',
+        body: '',
+        obsidianUrl,
+      };
+
+      const vtodoString = mapper.taskToVTODO(outboundTask, 'roundtrip-2');
+      const vtodo: CalendarObject = { url: '/cal/roundtrip.ics', data: vtodoString };
+      const parsed = mapper.vtodoToTask(vtodo);
+
+      expect(parsed.body).toBe('');
     });
   });
 });
