@@ -63,6 +63,7 @@ export default tseslint.config(
 		"coverage-unit/",
 		".obsidian-cache/",
 		".worktrees/",
+		".claude/",
 		"obsidian-releases/",
 		"docs/",
 		"eslint-plugin/",
