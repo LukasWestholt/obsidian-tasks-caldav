@@ -17,10 +17,9 @@ export interface ObsidianTask {
     priority: string;
     tags: string[];
     taskLocation: {
-        _tasksFile: {
-            _path: string;
-        };
-        _lineNumber: number;
+        /** Public obsidian-tasks accessor for the containing file path. */
+        path: string;
+        _lineNumber?: number;
     };
     originalMarkdown: string;
     createdDate: string | { format(fmt: string): string } | null;
@@ -186,7 +185,7 @@ export class ObsidianTasksWrapper {
      * Update a task's content in the vault
      */
     async updateTaskInVault(task: ObsidianTask, newContent: string): Promise<void> {
-        const filePath = task.taskLocation._tasksFile._path;
+        const filePath = task.taskLocation.path;
 
         // Get the file
         const file = this.app.vault.getAbstractFileByPath(filePath);
@@ -321,6 +320,22 @@ export class ObsidianTasksWrapper {
     }
 
     /**
+     * Resolve a task's containing file path via the public obsidian-tasks
+     * accessor. Returns null (and warns) if the path is absent, so one task
+     * with an unexpected shape can't abort the entire sync.
+     */
+    private resolveTaskPath(task: ObsidianTask): string | null {
+        const path = task.taskLocation?.path;
+        if (!path) {
+            console.warn(
+                `[ObsidianTasksWrapper] Skipping task with no resolvable path: ${task.originalMarkdown}`,
+            );
+            return null;
+        }
+        return path;
+    }
+
+    /**
      * Pair tasks with their body text by reading vault files.
      * Groups tasks by file to avoid re-reading the same file multiple times.
      */
@@ -329,7 +344,10 @@ export class ObsidianTasksWrapper {
 
         const tasksByFile = new Map<string, ObsidianTask[]>();
         for (const task of tasks) {
-            const filePath = task.taskLocation._tasksFile._path;
+            const filePath = this.resolveTaskPath(task);
+            if (filePath === null) {
+                continue;
+            }
             if (!tasksByFile.has(filePath)) {
                 tasksByFile.set(filePath, []);
             }
