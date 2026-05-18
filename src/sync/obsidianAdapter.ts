@@ -102,6 +102,8 @@ export class ObsidianAdapter {
 			newTaskId: string;
 		}> = [];
 
+		// used by the create and update cases; the complete case delegates serialisation to obsidian-tasks
+		const format = await this.wrapper.getConfiguredFormat();
 		for (const change of changes) {
 			try {
 				switch (change.type) {
@@ -114,6 +116,7 @@ export class ObsidianAdapter {
 						const markdown = this.mapper.toMarkdown(
 							taskWithId,
 							this.settings.syncTag,
+							format,
 						);
 
 						await this.wrapper.createTask(
@@ -138,6 +141,7 @@ export class ObsidianAdapter {
 						const markdown = this.mapper.toMarkdown(
 							change.task,
 							this.settings.syncTag,
+							format,
 						);
 						await this.wrapper.updateTaskInVault(
 							existingTask,
@@ -167,11 +171,13 @@ export class ObsidianAdapter {
 						// If toggle produced two lines, second is new recurring occurrence
 						const lines = result.split('\n');
 						if (lines.length > 1) {
-							const idMatch = lines[1].match(/🆔\s+(\S+)/);
-							if (idMatch) {
+							const idMatch =
+							lines[1].match(/\[id::\s*([^\]]+)\]/) ??
+							lines[1].match(/🆔\s+(\S+)/);
+						if (idMatch) {
 								completionRemappings.push({
 									oldTaskId: change.task.uid,
-									newTaskId: idMatch[1],
+									newTaskId: idMatch[1].trim(),
 								});
 							}
 						}
@@ -202,6 +208,7 @@ export class ObsidianAdapter {
 	 * Only called after sync succeeds, so IDs are only persisted when sync completes.
 	 */
 	async writeBackIds(obsidianTasks: CommonTask[]): Promise<void> {
+		const format = await this.wrapper.getConfiguredFormat();
 		for (const task of obsidianTasks) {
 			const original = this.tasksById.get(task.uid);
 			if (!original) continue;
@@ -212,6 +219,7 @@ export class ObsidianAdapter {
 				const markdown = this.mapper.toMarkdown(
 					task,
 					this.settings.syncTag,
+					format,
 				);
 				await this.wrapper.updateTaskInVault(original, markdown);
 			} catch (error) {

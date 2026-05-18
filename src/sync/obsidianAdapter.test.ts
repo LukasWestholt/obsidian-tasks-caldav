@@ -1,6 +1,6 @@
 import { ObsidianAdapter, ObsidianSyncSettings, TaskWithBody } from './obsidianAdapter';
 import { ObsidianTask, ObsidianTasksWrapper } from '../tasks/obsidianTasksWrapper';
-// CommonTask used indirectly via adapter types
+import { CommonTask } from './types';
 
 function makeTask(overrides: Partial<ObsidianTask> = {}): ObsidianTask {
   return {
@@ -37,6 +37,7 @@ const dummyWrapper = {
   initialize: jest.fn().mockReturnValue(true),
   getTaskId: jest.fn(),
   getToggleCommand: jest.fn().mockReturnValue(null),
+  getConfiguredFormat: jest.fn().mockResolvedValue('emoji'),
 } as unknown as ObsidianTasksWrapper;
 
 const defaultSettings: ObsidianSyncSettings = {
@@ -217,6 +218,83 @@ describe('ObsidianAdapter', () => {
     });
   });
 
+  describe('applyChanges / writeBackIds — serialise in obsidian-tasks configured format', () => {
+    const commonTask: CommonTask = {
+      uid: 'task-001', title: 'Configured format task', status: 'TODO',
+      dueDate: null, startDate: null, scheduledDate: null, completedDate: null,
+      priority: 'none', tags: [], recurrenceRule: '', body: '',
+    };
+
+    it('creates new tasks in dataview when obsidian-tasks is configured for dataview', async () => {
+      let written = '';
+      const createTask = jest.fn().mockImplementation((markdown: string) => { written = markdown; return Promise.resolve(); });
+      const wrapper = {
+        ...dummyWrapper, createTask,
+        getConfiguredFormat: jest.fn().mockResolvedValue('dataview'),
+      } as unknown as ObsidianTasksWrapper;
+      const adapter = new ObsidianAdapter(wrapper, { syncTag: 'sync', newTasksDestination: 'Inbox.md' });
+
+      await adapter.applyChanges([{ type: 'create', task: commonTask }]);
+
+      expect(written).toContain('[id:: ');
+      expect(written).not.toContain('🆔');
+    });
+
+    it('creates new tasks in emoji when obsidian-tasks is configured for emoji', async () => {
+      let written = '';
+      const createTask = jest.fn().mockImplementation((markdown: string) => { written = markdown; return Promise.resolve(); });
+      const wrapper = {
+        ...dummyWrapper, createTask,
+        getConfiguredFormat: jest.fn().mockResolvedValue('emoji'),
+      } as unknown as ObsidianTasksWrapper;
+      const adapter = new ObsidianAdapter(wrapper, { syncTag: 'sync', newTasksDestination: 'Inbox.md' });
+
+      await adapter.applyChanges([{ type: 'create', task: commonTask }]);
+
+      expect(written).toContain('🆔 ');
+      expect(written).not.toContain('[id:: ');
+    });
+
+    it('rewrites an updated task in the configured format regardless of its prior format', async () => {
+      let written = '';
+      const updateTaskInVault = jest.fn().mockImplementation((_t: unknown, markdown: string) => { written = markdown; return Promise.resolve(); });
+      const existing = makeTask({ id: 'task-001', originalMarkdown: '- [ ] Old 📅 2025-01-01 🆔 task-001 #sync' });
+      const wrapper = {
+        ...dummyWrapper,
+        findTaskById: jest.fn().mockReturnValue(existing),
+        updateTaskInVault,
+        getConfiguredFormat: jest.fn().mockResolvedValue('dataview'),
+      } as unknown as ObsidianTasksWrapper;
+      const adapter = new ObsidianAdapter(wrapper, { syncTag: 'sync', newTasksDestination: 'Inbox.md' });
+
+      await adapter.applyChanges([{ type: 'update', task: commonTask }]);
+
+      expect(written).toContain('[id:: task-001]');
+      expect(written).not.toContain('🆔');
+      expect(written).not.toContain('📅');
+    });
+
+    it('writes back a generated id in the configured format', async () => {
+      let written = '';
+      const updateTaskInVault = jest.fn().mockImplementation((_t: unknown, markdown: string) => { written = markdown; return Promise.resolve(); });
+      const noIdTask = makeTask({ id: '', originalMarkdown: '- [ ] New task #sync' });
+      const wrapper = {
+        ...dummyWrapper,
+        extractId: jest.fn().mockReturnValue(null),
+        updateTaskInVault,
+        getConfiguredFormat: jest.fn().mockResolvedValue('dataview'),
+      } as unknown as ObsidianTasksWrapper;
+      const adapter = new ObsidianAdapter(wrapper, { syncTag: 'sync', newTasksDestination: 'Inbox.md' });
+
+      const [normalized] = adapter.normalize([withBody(noIdTask)], () => null);
+      await adapter.writeBackIds([normalized]);
+
+      expect(updateTaskInVault).toHaveBeenCalledTimes(1);
+      expect(written).toContain('[id:: ');
+      expect(written).not.toContain('🆔');
+    });
+  });
+
   describe('applyChanges — complete', () => {
     it('calls executeToggleTaskDoneCommand for complete changes', async () => {
       const toggleFn = jest.fn().mockReturnValue(
@@ -277,6 +355,47 @@ describe('ObsidianAdapter', () => {
       const existingTask = makeTask({
         description: 'Weekly review',
         originalMarkdown: '- [ ] Weekly review 🔁 every week 📅 2026-02-17 🆔 task-001',
+        id: 'task-001',
+      });
+      adapter.normalize([withBody(existingTask)], (t) => t.id || null);
+
+      const result = await adapter.applyChanges([{
+        type: 'complete',
+        task: {
+          uid: 'task-001',
+          title: 'Weekly review',
+          status: 'DONE',
+          dueDate: '2026-02-17',
+          startDate: null,
+          scheduledDate: null,
+          completedDate: '2026-02-17',
+          priority: 'none',
+          tags: [],
+          recurrenceRule: 'FREQ=WEEKLY',
+          body: '',
+        },
+      }]);
+
+      expect(result.completionRemappings).toEqual([{
+        oldTaskId: 'task-001',
+        newTaskId: 'task-002',
+      }]);
+    });
+
+    it('returns completionRemapping when toggle produces new recurring task in dataview format', async () => {
+      const toggleResult = '- [x] Weekly review [repeat:: every week] [due:: 2026-02-17] [completion:: 2026-02-17] [id:: task-001]\n- [ ] Weekly review [repeat:: every week] [due:: 2026-02-24] [id:: task-002]';
+      const toggleFn = jest.fn().mockReturnValue(toggleResult);
+      const wrapper = {
+        ...dummyWrapper,
+        getToggleCommand: jest.fn().mockReturnValue(toggleFn),
+        updateTaskInVault: jest.fn().mockResolvedValue(undefined),
+        findTaskById: jest.fn().mockReturnValue(null),
+      } as unknown as ObsidianTasksWrapper;
+
+      const adapter = new ObsidianAdapter(wrapper, defaultSettings);
+      const existingTask = makeTask({
+        description: 'Weekly review',
+        originalMarkdown: '- [ ] Weekly review [repeat:: every week] [due:: 2026-02-17] [id:: task-001]',
         id: 'task-001',
       });
       adapter.normalize([withBody(existingTask)], (t) => t.id || null);
