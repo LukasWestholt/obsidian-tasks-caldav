@@ -150,6 +150,24 @@ Uses [wdio-obsidian-service](https://github.com/jesse-r-s-hines/wdio-obsidian-se
 **Maintenance:** `test/wdio/vault/.obsidian/plugins/tasks-caldav-sync/data.json` (emoji vault) must be kept in sync with the `CalDAVSettings` shape in `src/types.ts` whenever settings fields change. The dataview vault does not contain our plugin's `data.json`; since our plugin automatically follows obsidian-tasks' configured format, no format override is needed there.
 
 ## Release
-- Artifacts: `main.js`, `manifest.json`, `styles.css`
-- Tag matches `manifest.json` version exactly (no `v` prefix)
-- Update `versions.json` with version → minAppVersion mapping
+
+Releases are built and signed in CI — never from a local machine. The
+released `main.js` must be reproducible by Obsidian's verifier, so the
+binary always comes from `.github/workflows/release.yml`.
+
+Process — one command:
+1. `npm run release <version>` on master — bumps `manifest.json`,
+   `package.json`, `versions.json`, runs preflight (lint/typecheck/unit),
+   commits, pushes master, and creates the GitHub release as a
+   **pre-release** (requires the authenticated `gh` CLI).
+2. The `release` workflow (trigger: `release: published`) checks out the
+   tag, verifies tag == `manifest.json` version, builds, generates a
+   build-provenance attestation, uploads `main.js`/`manifest.json`/
+   `styles.css`, then promotes the pre-release to the latest stable
+   release.
+
+Notes:
+- Tag matches `manifest.json` version exactly (no `v` prefix).
+- It ships as a pre-release until CI finishes, so there is never a
+  public window with missing assets (Obsidian ignores pre-releases).
+- Never upload a locally-built `main.js`.
