@@ -1,3 +1,5 @@
+export type SyncDirection = 'bidirectional' | 'pull' | 'push';
+
 export interface CalendarMapping {
   obsidianTag: string;
   caldavCategory: string;
@@ -7,6 +9,8 @@ export interface CalendarMapping {
   serverUrl: string;
   username: string;
   password: string;
+  /** Direction of sync for this calendar. Absent ⇒ 'bidirectional'. */
+  syncDirection?: SyncDirection;
   /**
    * Exact CalDAV collection URL. When set, the client talks to this collection
    * directly and skips discovery + name-matching. When empty, the mapping is a

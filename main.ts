@@ -1,5 +1,5 @@
 import { App, Editor, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
-import { CalDAVSettings, CalendarMapping, DEFAULT_CALDAV_SETTINGS } from './src/types';
+import { CalDAVSettings, CalendarMapping, DEFAULT_CALDAV_SETTINGS, SyncDirection } from './src/types';
 import { describeIncompleteCalendar } from './src/utils/calendarConfig';
 import { extractTaskId, isValidTaskId } from './src/utils/taskIdGenerator';
 import { SyncEngine, SyncResult } from './src/sync/syncEngine';
@@ -314,6 +314,7 @@ class CalDAVSettingTab extends PluginSettingTab {
 
 	private renderCalendarMapping(containerEl: HTMLElement, index: number): void {
 		const calendar = this.plugin.settings.calendars[index];
+		const direction = calendar.syncDirection ?? 'bidirectional';
 
 		new Setting(containerEl)
 			.setName(`Calendar ${index + 1}`)
@@ -323,6 +324,20 @@ class CalDAVSettingTab extends PluginSettingTab {
 				.setWarning()
 				.onClick(async () => {
 					this.plugin.settings.calendars.splice(index, 1);
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		new Setting(containerEl)
+			.setName('Sync direction')
+			.setDesc(this.syncDirectionDesc(direction))
+			.addDropdown(dropdown => dropdown
+				.addOption('bidirectional', 'Bidirectional')
+				.addOption('pull', 'Pull from server only')
+				.addOption('push', 'Push to server only')
+				.setValue(direction)
+				.onChange(async (value) => {
+					calendar.syncDirection = value as SyncDirection;
 					await this.plugin.saveSettings();
 					this.display();
 				}));
@@ -356,10 +371,12 @@ class CalDAVSettingTab extends PluginSettingTab {
 			hintEl?.remove();
 			hintEl = null;
 			if (calendar.obsidianTag || calendar.caldavCategory) return;
-			hintEl = containerEl.createDiv({
-				cls: 'setting-item-description',
-				text: 'No filter set — every task in this calendar will sync both ways.',
-			});
+			const text = direction === 'pull'
+				? 'No filter set — every server task is pulled into this vault (nothing is written back to the server).'
+				: direction === 'push'
+					? 'No filter set — every task in this vault is pushed to the server (nothing is pulled back).'
+					: 'No filter set — every task in this calendar will sync both ways.';
+			hintEl = containerEl.createDiv({ cls: 'setting-item-description', text });
 		};
 		updateHint();
 
@@ -375,6 +392,7 @@ class CalDAVSettingTab extends PluginSettingTab {
 			.addButton(button => button
 				.setButtonText('Browse calendars')
 				.onClick(() => this.openBrowseCalendars(calendar)));
+		calendarUrlSetting.settingEl.addClass('sync-calendar-url');
 
 		if (!calendar.calendarUrl && calendar.calendarName.trim()) {
 			calendarUrlSetting.setDesc(`Currently matched by name "${calendar.calendarName}" — paste a URL or browse to pin the exact calendar.`);
@@ -404,6 +422,16 @@ class CalDAVSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+	}
+
+	private syncDirectionDesc(direction: SyncDirection): string {
+		if (direction === 'pull') {
+			return 'Server changes are brought into Obsidian. Nothing is ever written to the server.';
+		}
+		if (direction === 'push') {
+			return 'Obsidian changes are sent to the server. Server changes are never pulled back, though a sync ID is still written into each task that is pushed.';
+		}
+		return 'Obsidian and the server are kept in sync, both ways.';
 	}
 
 	private openBrowseCalendars(calendar: CalendarMapping): void {
