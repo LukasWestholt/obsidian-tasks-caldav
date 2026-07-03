@@ -29,6 +29,9 @@ export class ObsidianAdapter {
 	private wrapper: ObsidianTasksWrapper;
 	private settings: ObsidianSyncSettings;
 	private tasksById = new Map<string, ObsidianTask>();
+	// Every task ID in the vault (not just this calendar's), so generated IDs
+	// can never collide with a task another calendar or filter owns (#115).
+	private usedIds = new Set<string>();
 
 	constructor(
 		wrapper: ObsidianTasksWrapper,
@@ -46,6 +49,11 @@ export class ObsidianAdapter {
 
 	async fetchTasks(): Promise<CommonTask[]> {
 		const allInputs = await this.wrapper.getAllTasksWithBody();
+		this.usedIds = new Set(
+			allInputs
+				.map(({ task }) => this.wrapper.extractId(task))
+				.filter((id): id is string => id !== null),
+		);
 		const filtered = this.wrapper.filterByTag(allInputs, this.settings.syncTag);
 		const normalized = this.normalize(
 			filtered,
@@ -76,7 +84,7 @@ export class ObsidianAdapter {
 		this.tasksById = new Map();
 
 		for (const { task, body } of inputs) {
-			const taskId = extractId(task) ?? generateTaskId();
+			const taskId = extractId(task) ?? generateTaskId(this.usedIds);
 			this.tasksById.set(taskId, task);
 			const common = this.mapper.toCommonTask(task, taskId, body);
 
@@ -120,7 +128,7 @@ export class ObsidianAdapter {
 			try {
 				switch (change.type) {
 					case "create": {
-						const taskId = generateTaskId();
+						const taskId = generateTaskId(this.usedIds);
 						const taskWithId: CommonTask = {
 							...change.task,
 							uid: taskId,
@@ -219,8 +227,9 @@ export class ObsidianAdapter {
 	}
 
 	/**
-	 * Write IDs back to vault for tasks that had in-memory IDs generated during normalize.
-	 * Only called after sync succeeds, so IDs are only persisted when sync completes.
+	 * Write IDs back to vault for tasks that had in-memory IDs generated during
+	 * normalize. Runs before the CalDAV push so a failed push retries with the
+	 * same identities instead of minting new IDs and duplicating tasks.
 	 */
 	async writeBackIds(obsidianTasks: CommonTask[]): Promise<void> {
 		const { format, globalFilter } = await this.wrapper.getTasksPluginConfig();

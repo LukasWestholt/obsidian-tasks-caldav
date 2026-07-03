@@ -107,6 +107,10 @@ export class SyncEngine {
 					onProgress?.({ ...progress });
 				},
 			);
+			// Stamp IDs before the CalDAV push: if the push fails, the vault
+			// keeps the identities, so the retry converges on the same UIDs
+			// instead of minting new ones and duplicating tasks.
+			await this.obsidianAdapter.writeBackIds(obsidianTasks);
 			await this.caldavAdapter.applyChanges(
 				applicable.toCalDAV,
 				idMapping,
@@ -115,7 +119,6 @@ export class SyncEngine {
 					onProgress?.({ ...progress });
 				},
 			);
-			await this.obsidianAdapter.writeBackIds(obsidianTasks);
 
 			this.updateIdMapping(idMapping, createdMappings, completionRemappings, applicable);
 			this.persistState(obsidianTasks, caldavTasks, applicable, idMapping);

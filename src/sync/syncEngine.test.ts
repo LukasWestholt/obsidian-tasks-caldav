@@ -1811,6 +1811,29 @@ describe('SyncEngine', () => {
     });
   });
 
+  describe('id write-back happens before the CalDAV push', () => {
+    it('stamps generated IDs into the vault even when the CalDAV apply fails', async () => {
+      mockCreateVTODO.mockRejectedValue(new Error('Create VTODO failed: 412'));
+      mockGetAllTasksWithBody.mockResolvedValue([{
+        task: makeObsidianTask({
+          description: 'New local task',
+          id: '',
+          originalMarkdown: '- [ ] New local task #sync',
+        }),
+        body: '',
+      }]);
+
+      const engine = new SyncEngine(new App(), makeCalendarMapping(), makeSettings());
+      await engine.initialize();
+      const result = await engine.sync();
+
+      expect(result.success).toBe(false);
+      const stamped = mockUpdateTaskInVault.mock.calls
+        .filter(([, content]) => typeof content === 'string' && content.includes('🆔 '));
+      expect(stamped).toHaveLength(1);
+    });
+  });
+
   describe('sync progress reporting', () => {
     it('reports pull/push totals and per-change progress', async () => {
       // One pull (server task unknown to the vault) and one push (vault task
