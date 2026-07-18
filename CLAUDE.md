@@ -14,8 +14,13 @@ This is an Obsidian community plugin that provides bidirectional sync between ob
 - `npm run build` - Production build with type checking (`tsc -noEmit -skipLibCheck` then esbuild)
 - `npm run lint` - Run ESLint with Obsidian plugin rules
 - `npm test` - Run all tests (unit + E2E) with coverage. **Work is done when this passes.**
+- `npm run test:unit` - Unit tests only, no Docker required
 - `npm run test:watch` - Watch mode for unit tests only
 - `npm run version` - Bump version numbers in manifest.json and versions.json
+
+To run a single test file: `npx jest --selectProjects unit src/sync/diff.test.ts`  
+To run tests matching a name pattern: `npx jest --selectProjects unit -t "pattern"`  
+To run only Radicale/Vikunja/Nextcloud/Baikal E2E tests: `npm run test:e2e:radicale` / `:vikunja` / `:nextcloud` / `:baikal`
 
 ## Coding Standards
 
@@ -98,8 +103,25 @@ graph TB
 - `src/caldav/` — CalDAVClientDirect (HTTP I/O), VTODOMapper (iCal parsing)
 - `src/tasks/` — ObsidianTasksWrapper (vault I/O), ObsidianMapper (markdown parsing)
 - `src/storage/` — sync state persistence (baseline, IdMapping for taskId↔caldavUid)
+- `src/migrations/` — data migrations run once per vault on plugin load; `migrationRunner.ts` gates each migration by name in `settings.appliedMigrations`
 - `src/ui/` — modals, settings tab
 - `src/utils/` — task ID generation, helpers
+
+### Calendar configuration modes
+
+`CalendarMapping` supports two modes, controlled by which fields are set:
+
+- **URL-pinned** (`calendarUrl` non-empty): talks directly to the CalDAV collection URL, skips discovery. Preferred for new calendars.
+- **Legacy by-name** (`serverUrl` + `calendarName`, `calendarUrl` empty): discovers calendars under `serverUrl` and matches by name. Kept for backward compatibility.
+
+Both modes share the same `obsidianTag`, `caldavCategory`, `username`, `password`, and `syncDirection` fields.
+
+### Diff invariants
+
+`diff()` in `src/sync/diff.ts` is a pure three-way merge (obsidian × caldav × baseline). Two subtle invariants:
+
+- `startDate` (🛫) is **excluded from `tasksEqual()`** — it has no CalDAV counterpart and excluding it prevents every task with a start date from re-syncing forever.
+- The `reconcile` change type is emitted when both sides have a task with no baseline entry and matching content — this stitches together tasks from an initial import without treating them as conflicts.
 
 ### Key Patterns
 - Commands: `addCommand()` with `callback` or `editorCallback`
@@ -135,6 +157,7 @@ Excluded: `requestDumper.ts`, `obsidianTasksApi.ts`, `src/ui/`
 - Use `FetchHttpClient` (not Obsidian's `requestUrl`)
 - Test the round-trip: create → fetch → verify
 - Local Radicale server via Docker (`docker-compose.yml`)
+- All tests run with `TZ=America/New_York` (set in `jest.config.cjs` before workers spawn). Date assertions must account for this fixed timezone.
 
 ### Obsidian smoke tests (wdio)
 Uses [wdio-obsidian-service](https://github.com/jesse-r-s-hines/wdio-obsidian-service) to launch a real Obsidian instance with the real obsidian-tasks plugin and our built plugin against a local Docker Radicale server.

@@ -1356,6 +1356,138 @@ END:VTODO`;
     });
   });
 
+  describe('merge mode — existingData preserves foreign properties', () => {
+    const baseTask: Omit<CommonTask, 'uid'> = {
+      title: 'Updated task',
+      status: 'TODO',
+      dueDate: null,
+      scheduledDate: null,
+      startDate: null,
+      completedDate: null,
+      priority: 'none',
+      recurrenceRule: '',
+      tags: [],
+      body: '',
+    };
+
+    function existingVTODO(extraLines: string[]): string {
+      return [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//jtx Board//EN',
+        'BEGIN:VTODO',
+        'UID:existing-uid-123',
+        'DTSTAMP:20250101T000000Z',
+        'SUMMARY:Original title',
+        'STATUS:NEEDS-ACTION',
+        ...extraLines,
+        'END:VTODO',
+        'END:VCALENDAR',
+      ].join('\r\n');
+    }
+
+    it('updates managed SUMMARY and STATUS on merge', () => {
+      const result = mapper.taskToVTODO({ ...baseTask, title: 'New title', status: 'IN_PROGRESS' }, 'existing-uid-123', existingVTODO([]));
+      expect(result).toContain('SUMMARY:New title');
+      expect(result).toContain('STATUS:IN-PROCESS');
+      expect(result).not.toContain('SUMMARY:Original title');
+    });
+
+    it('preserves UID from existing data exactly once', () => {
+      const result = mapper.taskToVTODO(baseTask, 'existing-uid-123', existingVTODO([]));
+      expect(result).toContain('UID:existing-uid-123');
+      expect((result.match(/^UID:/gm) ?? []).length).toBe(1);
+    });
+
+    it('preserves RELATED-TO through update', () => {
+      const result = mapper.taskToVTODO(baseTask, 'existing-uid-123', existingVTODO(['RELATED-TO;RELTYPE=PARENT:parent-uid-xyz']));
+      expect(result).toContain('RELATED-TO;RELTYPE=PARENT:parent-uid-xyz');
+    });
+
+    it('preserves X- extension properties through update', () => {
+      const result = mapper.taskToVTODO(baseTask, 'existing-uid-123', existingVTODO([
+        'X-JTX-FOOBAR:custom-metadata',
+        'X-APPLE-SORT-ORDER:1',
+      ]));
+      expect(result).toContain('X-JTX-FOOBAR:custom-metadata');
+      expect(result).toContain('X-APPLE-SORT-ORDER:1');
+    });
+
+    it('preserves VALARM sub-component through update', () => {
+      const result = mapper.taskToVTODO(baseTask, 'existing-uid-123', existingVTODO([
+        'BEGIN:VALARM',
+        'ACTION:DISPLAY',
+        'DESCRIPTION:Reminder',
+        'TRIGGER:-PT15M',
+        'END:VALARM',
+      ]));
+      expect(result).toContain('BEGIN:VALARM');
+      expect(result).toContain('ACTION:DISPLAY');
+      expect(result).toContain('TRIGGER:-PT15M');
+      expect(result).toContain('END:VALARM');
+    });
+
+    it('preserves PERCENT-COMPLETE when task is not completing', () => {
+      const result = mapper.taskToVTODO(baseTask, 'existing-uid-123', existingVTODO(['PERCENT-COMPLETE:40']));
+      expect(result).toContain('PERCENT-COMPLETE:40');
+    });
+
+    it('strips old PERCENT-COMPLETE and sets 100 when completing', () => {
+      const completing = { ...baseTask, status: 'DONE' as const, completedDate: '2026-07-18' };
+      const result = mapper.taskToVTODO(completing, 'existing-uid-123', existingVTODO(['PERCENT-COMPLETE:40']));
+      expect(result).toContain('PERCENT-COMPLETE:100');
+      expect(result).not.toContain('PERCENT-COMPLETE:40');
+    });
+
+    it('strips COMPLETED from server when task is not completed', () => {
+      const result = mapper.taskToVTODO(baseTask, 'existing-uid-123', existingVTODO(['COMPLETED:20260101T120000Z']));
+      expect(result).not.toContain('COMPLETED:');
+    });
+
+    it('replaces DUE when task has a new due date', () => {
+      const result = mapper.taskToVTODO({ ...baseTask, dueDate: '2026-08-15' }, 'existing-uid-123', existingVTODO(['DUE;VALUE=DATE:20250101']));
+      expect(result).toContain('DUE;VALUE=DATE:20260815');
+      expect(result).not.toContain('DUE;VALUE=DATE:20250101');
+    });
+
+    it('strips DUE when task has no due date', () => {
+      const result = mapper.taskToVTODO(baseTask, 'existing-uid-123', existingVTODO(['DUE;VALUE=DATE:20250101']));
+      expect(result).not.toMatch(/^DUE/m);
+    });
+
+    it('preserves VTIMEZONE block from existing data', () => {
+      const withTimezone = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Test//EN',
+        'BEGIN:VTIMEZONE',
+        'TZID:America/New_York',
+        'BEGIN:STANDARD',
+        'DTSTART:19701101T020000',
+        'END:STANDARD',
+        'END:VTIMEZONE',
+        'BEGIN:VTODO',
+        'UID:tz-uid',
+        'SUMMARY:Original',
+        'STATUS:NEEDS-ACTION',
+        'END:VTODO',
+        'END:VCALENDAR',
+      ].join('\r\n');
+
+      const result = mapper.taskToVTODO(baseTask, 'tz-uid', withTimezone);
+      expect(result).toContain('BEGIN:VTIMEZONE');
+      expect(result).toContain('TZID:America/New_York');
+      expect(result).toContain('END:VTIMEZONE');
+    });
+
+    it('falls back to fresh build when existingData is absent', () => {
+      const result = mapper.taskToVTODO({ ...baseTask, title: 'My task' }, 'fresh-uid');
+      expect(result).toContain('BEGIN:VCALENDAR');
+      expect(result).toContain('UID:fresh-uid');
+      expect(result).toContain('SUMMARY:My task');
+    });
+  });
+
   describe('DTSTART maps to scheduledDate only (start date is local-only)', () => {
     const baseTask: Omit<CommonTask, 'uid'> = {
       title: 'Date mapping',

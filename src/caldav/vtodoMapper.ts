@@ -19,23 +19,45 @@ type VTODOTaskFields = Omit<CommonTask, 'uid'>;
 export class VTODOMapper {
   /**
    * Convert a CommonTask to VTODO iCalendar string.
-   * @param task The common task
-   * @param uid The CalDAV UID (use for updates, generate new for creates)
-   * @returns VTODO iCalendar string
+   *
+   * When `existingData` is supplied (update/complete paths), only the
+   * properties this plugin manages are replaced; all other properties
+   * (RELATED-TO, VALARM blocks, X-* extension lines, PERCENT-COMPLETE
+   * when not completing, etc.) are carried through unchanged. This
+   * preserves data written by other CalDAV clients such as jtx Board.
+   *
+   * When `existingData` is absent (create path), a fresh VCALENDAR is built.
    */
-  taskToVTODO(task: Omit<CommonTask, 'uid'>, uid: string): string {
-    const lines: string[] = [];
+  taskToVTODO(task: Omit<CommonTask, 'uid'>, uid: string, existingData?: string): string {
+    return existingData
+      ? this.mergeIntoVTODO(task, existingData)
+      : this.buildFreshVTODO(task, uid);
+  }
 
-    lines.push('BEGIN:VCALENDAR');
-    lines.push('VERSION:2.0');
-    lines.push('PRODID:-//Obsidian//Tasks CalDAV Sync//EN');
-    lines.push('BEGIN:VTODO');
-    lines.push(`UID:${uid}`);
+  private buildFreshVTODO(task: Omit<CommonTask, 'uid'>, uid: string): string {
+    return [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Obsidian//Tasks CalDAV Sync//EN',
+      'BEGIN:VTODO',
+      `UID:${uid}`,
+      ...this.buildManagedLines(task),
+      'END:VTODO',
+      'END:VCALENDAR',
+    ].join('\r\n');
+  }
+
+  /**
+   * The VTODO properties owned by this plugin. Written on every create/update.
+   * Any property NOT in this list is foreign and must pass through untouched
+   * in merge mode.
+   */
+  private buildManagedLines(task: Omit<CommonTask, 'uid'>): string[] {
+    const lines: string[] = [];
     lines.push(`DTSTAMP:${this.formatDateTimeUTC(new Date())}`);
     lines.push(`LAST-MODIFIED:${this.formatDateTimeUTC(new Date())}`);
     lines.push(`SUMMARY:${this.escapeText(task.title)}`);
 
-    // Description (body text), with optional obsidian link prepended
     const description = this.buildDescription(task.body, task.obsidianUrl);
     if (description) {
       lines.push(`DESCRIPTION:${this.escapeText(description)}`);
@@ -47,10 +69,8 @@ export class VTODOMapper {
       lines.push(`URL:${task.obsidianUrl}`);
     }
 
-    // Status mapping
     lines.push(`STATUS:${this.mapStatusToVTODO(task.status)}`);
 
-    // Due date
     if (task.dueDate) {
       lines.push(`DUE;VALUE=DATE:${this.formatDate(task.dueDate)}`);
     }
@@ -61,29 +81,85 @@ export class VTODOMapper {
       lines.push(`DTSTART;VALUE=DATE:${this.formatDate(task.scheduledDate)}`);
     }
 
-    // Completed date
     if (task.completedDate) {
       lines.push(`COMPLETED:${this.formatDateTimeUTC(this.toCompletedInstant(task.completedDate))}`);
       lines.push('PERCENT-COMPLETE:100');
     }
 
-    // Priority mapping (Obsidian: lowest/low/none/medium/high/highest -> VTODO: 0-9)
     lines.push(`PRIORITY:${this.mapPriorityToVTODO(task.priority)}`);
 
-    // Recurrence rule
     if (task.recurrenceRule) {
       lines.push(`RRULE:${task.recurrenceRule}`);
     }
 
-    // Tags as categories
     if (task.tags.length > 0) {
       lines.push(`CATEGORIES:${task.tags.map(t => this.escapeText(t)).join(',')}`);
     }
 
-    lines.push('END:VTODO');
-    lines.push('END:VCALENDAR');
+    return lines;
+  }
 
-    return lines.join('\r\n');
+  /**
+   * Patch an existing iCalendar string in place. Strips only the properties
+   * this plugin owns, then injects fresh values before END:VTODO. Sub-components
+   * (VALARM, etc.) and unrecognised properties pass through verbatim.
+   *
+   * PERCENT-COMPLETE is treated specially: it is only stripped (and re-emitted
+   * as 100) when the task is being completed. Otherwise the server's value
+   * (e.g. jtx Board's in-progress percentage) is preserved.
+   */
+  private mergeIntoVTODO(task: Omit<CommonTask, 'uid'>, existingData: string): string {
+    const ALWAYS_MANAGED = new Set([
+      'SUMMARY', 'DESCRIPTION', 'STATUS', 'DUE', 'DTSTART',
+      'PRIORITY', 'RRULE', 'CATEGORIES', 'DTSTAMP', 'LAST-MODIFIED', 'COMPLETED', 'URL',
+    ]);
+    const isCompleting = !!task.completedDate;
+
+    const lines = this.unfold(existingData).split(/\r?\n/).filter(l => l.length > 0);
+    const out: string[] = [];
+    let inVTODO = false;
+    let depth = 0;
+
+    for (const line of lines) {
+      if (!inVTODO) {
+        out.push(line);
+        if (line === 'BEGIN:VTODO') inVTODO = true;
+        continue;
+      }
+
+      if (line === 'END:VTODO') {
+        out.push(...this.buildManagedLines(task));
+        out.push(line);
+        inVTODO = false;
+        continue;
+      }
+
+      if (line.startsWith('BEGIN:')) {
+        depth++;
+        out.push(line);
+        continue;
+      }
+
+      if (line.startsWith('END:')) {
+        depth--;
+        out.push(line);
+        continue;
+      }
+
+      if (depth > 0) {
+        // Inside a sub-component (VALARM, etc.) — always preserve
+        out.push(line);
+        continue;
+      }
+
+      // Top-level VTODO property: skip managed ones (re-emitted before END:VTODO)
+      const propName = line.split(/[;:]/)[0].toUpperCase();
+      if (ALWAYS_MANAGED.has(propName)) continue;
+      if (propName === 'PERCENT-COMPLETE' && isCompleting) continue;
+      out.push(line);
+    }
+
+    return out.join('\r\n');
   }
 
   /**
