@@ -51,8 +51,18 @@ export class VTODOMapper {
    * The VTODO properties owned by this plugin. Written on every create/update.
    * Any property NOT in this list is foreign and must pass through untouched
    * in merge mode.
+   *
+   * When `mergeContext` is provided we are on the update/complete path:
+   *  - STATUS is omitted for TODO tasks so the server's IN-PROCESS (or
+   *    NEEDS-ACTION) passes through untouched from the merge loop.
+   *  - DUE/DTSTART carry the existing timezone and time-of-day when the
+   *    server stored a datetime value, so jtx Board's time precision survives
+   *    an Obsidian title or date change.
    */
-  private buildManagedLines(task: Omit<CommonTask, 'uid'>): string[] {
+  private buildManagedLines(
+    task: Omit<CommonTask, 'uid'>,
+    mergeContext?: { existingDue?: string | null; existingDtstart?: string | null },
+  ): string[] {
     const lines: string[] = [];
     lines.push(`DTSTAMP:${this.formatDateTimeUTC(new Date())}`);
     lines.push(`LAST-MODIFIED:${this.formatDateTimeUTC(new Date())}`);
@@ -69,16 +79,28 @@ export class VTODOMapper {
       lines.push(`URL:${task.obsidianUrl}`);
     }
 
-    lines.push(`STATUS:${this.mapStatusToVTODO(task.status)}`);
+    // In merge mode, STATUS for open (TODO) tasks is preserved from the existing
+    // VTODO by the merge loop — emitting it here would overwrite IN-PROCESS.
+    if (!mergeContext || task.status !== 'TODO') {
+      lines.push(`STATUS:${this.mapStatusToVTODO(task.status)}`);
+    }
 
     if (task.dueDate) {
-      lines.push(`DUE;VALUE=DATE:${this.formatDate(task.dueDate)}`);
+      lines.push(
+        mergeContext?.existingDue
+          ? this.mergeDatetime('DUE', task.dueDate, mergeContext.existingDue)
+          : `DUE;VALUE=DATE:${this.formatDate(task.dueDate)}`,
+      );
     }
 
     // DTSTART carries the scheduled date (⏳) — the field CalDAV clients plan
     // by. The start date (🛫) has no CalDAV counterpart and never syncs.
     if (task.scheduledDate) {
-      lines.push(`DTSTART;VALUE=DATE:${this.formatDate(task.scheduledDate)}`);
+      lines.push(
+        mergeContext?.existingDtstart
+          ? this.mergeDatetime('DTSTART', task.scheduledDate, mergeContext.existingDtstart)
+          : `DTSTART;VALUE=DATE:${this.formatDate(task.scheduledDate)}`,
+      );
     }
 
     if (task.completedDate) {
@@ -110,12 +132,19 @@ export class VTODOMapper {
    */
   private mergeIntoVTODO(task: Omit<CommonTask, 'uid'>, existingData: string): string {
     const ALWAYS_MANAGED = new Set([
-      'SUMMARY', 'DESCRIPTION', 'STATUS', 'DUE', 'DTSTART',
+      'SUMMARY', 'DESCRIPTION', 'DUE', 'DTSTART',
       'PRIORITY', 'RRULE', 'CATEGORIES', 'DTSTAMP', 'LAST-MODIFIED', 'COMPLETED', 'URL',
+      // STATUS and PERCENT-COMPLETE are handled inline below
     ]);
     const isCompleting = !!task.completedDate;
 
-    const lines = this.unfold(existingData).split(/\r?\n/).filter(l => l.length > 0);
+    const unfolded = this.unfold(existingData);
+    const mergeContext = {
+      existingDue: this.extractRawDatetimeLine(unfolded, 'DUE'),
+      existingDtstart: this.extractRawDatetimeLine(unfolded, 'DTSTART'),
+    };
+
+    const lines = unfolded.split(/\r?\n/).filter(l => l.length > 0);
     const out: string[] = [];
     let inVTODO = false;
     let depth = 0;
@@ -128,34 +157,28 @@ export class VTODOMapper {
       }
 
       if (line === 'END:VTODO') {
-        out.push(...this.buildManagedLines(task));
+        out.push(...this.buildManagedLines(task, mergeContext));
         out.push(line);
         inVTODO = false;
         continue;
       }
 
-      if (line.startsWith('BEGIN:')) {
-        depth++;
-        out.push(line);
-        continue;
-      }
+      if (line.startsWith('BEGIN:')) { depth++; out.push(line); continue; }
+      if (line.startsWith('END:')) { depth--; out.push(line); continue; }
+      if (depth > 0) { out.push(line); continue; }
 
-      if (line.startsWith('END:')) {
-        depth--;
-        out.push(line);
-        continue;
-      }
-
-      if (depth > 0) {
-        // Inside a sub-component (VALARM, etc.) — always preserve
-        out.push(line);
-        continue;
-      }
-
-      // Top-level VTODO property: skip managed ones (re-emitted before END:VTODO)
       const propName = line.split(/[;:]/)[0].toUpperCase();
       if (ALWAYS_MANAGED.has(propName)) continue;
       if (propName === 'PERCENT-COMPLETE' && isCompleting) continue;
+
+      // STATUS: preserve the server's value (IN-PROCESS or NEEDS-ACTION) when
+      // Obsidian has no opinion — i.e. the task is open (TODO). Terminal states
+      // (DONE, CANCELLED) are stripped here and re-emitted by buildManagedLines.
+      if (propName === 'STATUS') {
+        if (task.status === 'TODO') out.push(line);
+        continue;
+      }
+
       out.push(line);
     }
 
@@ -246,7 +269,10 @@ export class VTODOMapper {
       case 'NEEDS-ACTION':
         return 'TODO';
       case 'IN-PROCESS':
-        return 'IN_PROGRESS';
+        // Obsidian-tasks has no in-progress checkbox; treat as open so the diff
+        // sees TODO on both sides and doesn't generate a spurious update that
+        // would overwrite IN-PROCESS with NEEDS-ACTION on every sync.
+        return 'TODO';
       case 'COMPLETED':
         return 'DONE';
       case 'CANCELLED':
@@ -288,6 +314,34 @@ export class VTODOMapper {
     if (priority <= 6) return 'medium';
     if (priority <= 8) return 'low';
     return 'lowest';
+  }
+
+  /**
+   * Extract the raw params+value segment of a date/datetime property line so
+   * the merge path can preserve time precision and timezone.
+   * Returns e.g. `;TZID=Europe/Berlin:20240115T140000` or `;VALUE=DATE:20240115`.
+   */
+  private extractRawDatetimeLine(unfolded: string, property: string): string | null {
+    const regex = new RegExp(`^${property}(;[^:]+)?:(.+)$`, 'm');
+    const match = unfolded.match(regex);
+    if (!match) return null;
+    return `${match[1] ?? ''}:${match[2].trim()}`;
+  }
+
+  /**
+   * Emit a DUE or DTSTART line that preserves the server's timezone and
+   * time-of-day when it stored a datetime value, updating only the date digits.
+   * Falls back to VALUE=DATE when the existing value was date-only.
+   */
+  private mergeDatetime(prop: string, newDate: string, existingParamsAndValue: string): string {
+    const colonIdx = existingParamsAndValue.indexOf(':');
+    const params = colonIdx >= 0 ? existingParamsAndValue.substring(0, colonIdx) : '';
+    const value = colonIdx >= 0 ? existingParamsAndValue.substring(colonIdx + 1) : existingParamsAndValue;
+    if (value.length > 8 && value.includes('T')) {
+      // Datetime: update the 8-digit date prefix, carry the time suffix (T…Z or T…)
+      return `${prop}${params}:${this.formatDate(newDate)}${value.substring(8)}`;
+    }
+    return `${prop};VALUE=DATE:${this.formatDate(newDate)}`;
   }
 
   /**

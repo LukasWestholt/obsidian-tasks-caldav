@@ -438,6 +438,7 @@ describe('CalDAVAdapter E2E', () => {
       expect(rawData).toContain('BEGIN:VALARM');
       expect(rawData).toContain('END:VALARM');
       expect(rawData).toContain('PERCENT-COMPLETE:40');
+      expect(rawData).toContain('STATUS:IN-PROCESS'); // must survive the Obsidian update
 
       const tasks = adapter.normalize(vtodos, emptyIdMapping);
       expect(tasks[0].title).toBe('Plan trip (updated)');
@@ -495,6 +496,58 @@ describe('CalDAVAdapter E2E', () => {
       expect(rawData).not.toContain('PERCENT-COMPLETE:60');
       expect(rawData).toContain('X-JTX-FOOBAR:preserved');
       expect(rawData).toContain('STATUS:COMPLETED');
+    });
+
+    it('preserves TZID and time-of-day on DUE through an Obsidian date change', async () => {
+      const client = makeClient();
+      const adapter = new CalDAVAdapter(client);
+      await client.connect();
+
+      const uid = `e2e-jtx-datetime-${Date.now()}`;
+      const jtxVTODO = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//jtx Board//EN',
+        'BEGIN:VTODO',
+        `UID:${uid}`,
+        'DTSTAMP:20250101T000000Z',
+        'SUMMARY:Meeting prep',
+        'STATUS:IN-PROCESS',
+        'DUE;TZID=Europe/Berlin:20240115T140000',
+        'END:VTODO',
+        'END:VCALENDAR',
+      ].join('\r\n');
+
+      await client.createVTODO(jtxVTODO, uid);
+
+      const updatedTask: CommonTask = {
+        uid: 'obs-dt',
+        title: 'Meeting prep',
+        status: 'TODO',
+        dueDate: '2026-09-01',
+        startDate: null,
+        scheduledDate: null,
+        completedDate: null,
+        priority: 'none',
+        tags: [],
+        recurrenceRule: '',
+        body: '',
+      };
+
+      const idMapping: IdMapping = {
+        taskIdToCaldavUid: { 'obs-dt': uid },
+        caldavUidToTaskId: { [uid]: 'obs-dt' },
+      };
+      await adapter.applyChanges([{ type: 'update', task: updatedTask }], idMapping);
+
+      const vtodos = await client.fetchVTODOs();
+      const rawData = vtodos[0].data;
+
+      // Date updated; timezone and time-of-day must be preserved
+      expect(rawData).toMatch(/DUE;TZID=Europe\/Berlin:20260901T140000/);
+      expect(rawData).not.toMatch(/DUE;VALUE=DATE/);
+      // STATUS:IN-PROCESS must also survive
+      expect(rawData).toContain('STATUS:IN-PROCESS');
     });
   });
 

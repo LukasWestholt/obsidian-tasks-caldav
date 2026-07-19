@@ -320,7 +320,7 @@ END:VTODO`;
     it('should map all VTODO statuses correctly', () => {
       const statuses = [
         { vtodo: 'NEEDS-ACTION', obsidian: 'TODO' },
-        { vtodo: 'IN-PROCESS', obsidian: 'IN_PROGRESS' },
+        { vtodo: 'IN-PROCESS', obsidian: 'TODO' }, // IN-PROCESS maps to TODO — no Obsidian equivalent
         { vtodo: 'COMPLETED', obsidian: 'DONE' },
         { vtodo: 'CANCELLED', obsidian: 'CANCELLED' }
       ];
@@ -1485,6 +1485,75 @@ END:VTODO`;
       expect(result).toContain('BEGIN:VCALENDAR');
       expect(result).toContain('UID:fresh-uid');
       expect(result).toContain('SUMMARY:My task');
+    });
+
+    describe('STATUS:IN-PROCESS preservation', () => {
+      it('preserves STATUS:IN-PROCESS when Obsidian edits title (task stays TODO)', () => {
+        const existing = existingVTODO(['STATUS:IN-PROCESS'].concat(
+          existingVTODO([]).includes('STATUS:NEEDS-ACTION') ? [] : [],
+        )).replace('STATUS:NEEDS-ACTION', 'STATUS:IN-PROCESS');
+        const result = mapper.taskToVTODO({ ...baseTask, title: 'Edited title' }, 'existing-uid-123', existing);
+        expect(result).toContain('STATUS:IN-PROCESS');
+        expect(result).not.toContain('STATUS:NEEDS-ACTION');
+      });
+
+      it('overrides STATUS:IN-PROCESS with COMPLETED when completing', () => {
+        const existing = existingVTODO([]).replace('STATUS:NEEDS-ACTION', 'STATUS:IN-PROCESS');
+        const completing = { ...baseTask, status: 'DONE' as const, completedDate: '2026-07-19' };
+        const result = mapper.taskToVTODO(completing, 'existing-uid-123', existing);
+        expect(result).toContain('STATUS:COMPLETED');
+        expect(result).not.toContain('STATUS:IN-PROCESS');
+      });
+
+      it('overrides STATUS:IN-PROCESS with CANCELLED when cancelling', () => {
+        const existing = existingVTODO([]).replace('STATUS:NEEDS-ACTION', 'STATUS:IN-PROCESS');
+        const result = mapper.taskToVTODO({ ...baseTask, status: 'CANCELLED' }, 'existing-uid-123', existing);
+        expect(result).toContain('STATUS:CANCELLED');
+        expect(result).not.toContain('STATUS:IN-PROCESS');
+      });
+
+      it('passes STATUS:NEEDS-ACTION through when task is TODO', () => {
+        const result = mapper.taskToVTODO(baseTask, 'existing-uid-123', existingVTODO([]));
+        expect(result).toContain('STATUS:NEEDS-ACTION');
+      });
+    });
+
+    describe('datetime precision on DUE and DTSTART', () => {
+      it('preserves TZID and time-of-day when updating DUE date', () => {
+        const existing = existingVTODO(['DUE;TZID=Europe/Berlin:20240115T140000']);
+        const result = mapper.taskToVTODO({ ...baseTask, dueDate: '2026-08-20' }, 'existing-uid-123', existing);
+        expect(result).toContain('DUE;TZID=Europe/Berlin:20260820T140000');
+        expect(result).not.toMatch(/DUE;VALUE=DATE/);
+      });
+
+      it('preserves UTC Z suffix when updating DUE date', () => {
+        const existing = existingVTODO(['DUE:20240115T140000Z']);
+        const result = mapper.taskToVTODO({ ...baseTask, dueDate: '2026-08-20' }, 'existing-uid-123', existing);
+        expect(result).toContain('DUE:20260820T140000Z');
+      });
+
+      it('preserves TZID and time-of-day when updating DTSTART date', () => {
+        const existing = existingVTODO(['DTSTART;TZID=America/New_York:20240110T090000']);
+        const result = mapper.taskToVTODO({ ...baseTask, scheduledDate: '2026-09-01' }, 'existing-uid-123', existing);
+        expect(result).toContain('DTSTART;TZID=America/New_York:20260901T090000');
+      });
+
+      it('keeps DUE as VALUE=DATE when existing was date-only', () => {
+        const existing = existingVTODO(['DUE;VALUE=DATE:20240115']);
+        const result = mapper.taskToVTODO({ ...baseTask, dueDate: '2026-08-20' }, 'existing-uid-123', existing);
+        expect(result).toContain('DUE;VALUE=DATE:20260820');
+      });
+
+      it('writes VALUE=DATE when DUE was not previously set', () => {
+        const result = mapper.taskToVTODO({ ...baseTask, dueDate: '2026-08-20' }, 'existing-uid-123', existingVTODO([]));
+        expect(result).toContain('DUE;VALUE=DATE:20260820');
+      });
+
+      it('preserves same datetime unchanged when due date is not modified', () => {
+        const existing = existingVTODO(['DUE;TZID=Europe/Berlin:20240115T140000']);
+        const result = mapper.taskToVTODO({ ...baseTask, dueDate: '2024-01-15' }, 'existing-uid-123', existing);
+        expect(result).toContain('DUE;TZID=Europe/Berlin:20240115T140000');
+      });
     });
   });
 
