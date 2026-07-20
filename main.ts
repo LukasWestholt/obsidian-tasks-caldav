@@ -371,7 +371,7 @@ class CalDAVSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('New tasks section')
-			.setDesc('Heading in the destination file under which new tasks are inserted. Leave empty to append to the end of the file.')
+			.setDesc('Heading name (without #) in the destination file under which new tasks are inserted. Leave empty to append to the end of the file.')
 			.addText(text => text
 				.setPlaceholder('Inbox')
 				.setValue(this.plugin.settings.newTasksSection ?? '')
