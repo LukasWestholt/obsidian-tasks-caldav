@@ -1,6 +1,6 @@
 name: Tag release on version bump
 
-# When a release/<version> PR merges to master, manifest.json's version
+# When a release/<version> PR merges to main, manifest.json's version
 # changes. This workflow turns that into a GitHub release: it creates the
 # tag/release as a pre-release, then calls release.yml to build, attest,
 # upload, and promote.
@@ -10,7 +10,7 @@ name: Tag release on version bump
 # with GITHUB_TOKEN does not trigger further workflow runs.
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths:
       - manifest.json
 
@@ -43,7 +43,7 @@ jobs:
             echo "created=false" >> "$GITHUB_OUTPUT"
           else
             gh release create "$VERSION" \
-              --target master \
+              --target main \
               --title "$VERSION" \
               --generate-notes \
               --prerelease

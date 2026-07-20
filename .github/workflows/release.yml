@@ -1,6 +1,6 @@
 name: Release
 
-# Builds from the release tag (tag = version, target = master), attaches a
+# Builds from the release tag (tag = version, target = main), attaches a
 # build-provenance attestation, uploads the assets, and promotes the
 # pre-release to latest. The released main.js is therefore always CI-built
 # and reproducible — never a local build.
@@ -45,7 +45,7 @@ jobs:
           MANIFEST_VERSION="$(node -p "require('./manifest.json').version")"
           if [ "$MANIFEST_VERSION" != "$TAG" ]; then
             echo "Release tag $TAG does not match manifest.json version $MANIFEST_VERSION." >&2
-            echo "The release/<version> PR must be merged to master before the release is created." >&2
+            echo "The release/<version> PR must be merged to main before the release is created." >&2
             exit 1
           fi
 
