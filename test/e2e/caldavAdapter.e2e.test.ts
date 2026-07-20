@@ -378,6 +378,179 @@ describe('CalDAVAdapter E2E', () => {
     });
   });
 
+  describe('foreign property preservation (jtx Board / RFC 5545)', () => {
+    it('preserves RELATED-TO, VALARM, X- extension, and PERCENT-COMPLETE through an Obsidian update', async () => {
+      const client = makeClient();
+      const adapter = new CalDAVAdapter(client);
+      await client.connect();
+
+      const uid = `e2e-jtx-${Date.now()}`;
+      const jtxVTODO = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//jtx Board//EN',
+        'BEGIN:VTODO',
+        `UID:${uid}`,
+        'DTSTAMP:20250101T000000Z',
+        'SUMMARY:Plan trip',
+        'STATUS:IN-PROCESS',
+        'PERCENT-COMPLETE:40',
+        'RELATED-TO;RELTYPE=PARENT:parent-uid-123',
+        'X-JTX-FOOBAR:custom-metadata',
+        'BEGIN:VALARM',
+        'ACTION:DISPLAY',
+        'DESCRIPTION:Reminder',
+        'TRIGGER:-PT15M',
+        'END:VALARM',
+        'END:VTODO',
+        'END:VCALENDAR',
+      ].join('\r\n');
+
+      await client.createVTODO(jtxVTODO, uid);
+
+      const updatedTask: CommonTask = {
+        uid: 'obs-jtx',
+        title: 'Plan trip (updated)',
+        status: 'TODO',
+        dueDate: '2026-12-01',
+        startDate: null,
+        scheduledDate: null,
+        completedDate: null,
+        priority: 'high',
+        tags: [],
+        recurrenceRule: '',
+        body: '',
+      };
+
+      const idMapping: IdMapping = {
+        taskIdToCaldavUid: { 'obs-jtx': uid },
+        caldavUidToTaskId: { [uid]: 'obs-jtx' },
+      };
+      await adapter.applyChanges([{ type: 'update', task: updatedTask }], idMapping);
+
+      const vtodos = await client.fetchVTODOs();
+      expect(vtodos).toHaveLength(1);
+      const rawData = vtodos[0].data;
+
+      expect(rawData).toContain('RELATED-TO');
+      expect(rawData).toContain('parent-uid-123');
+      expect(rawData).toContain('X-JTX-FOOBAR:custom-metadata');
+      expect(rawData).toContain('BEGIN:VALARM');
+      expect(rawData).toContain('END:VALARM');
+      expect(rawData).toContain('PERCENT-COMPLETE:40');
+      expect(rawData).toContain('STATUS:IN-PROCESS'); // must survive the Obsidian update
+
+      const tasks = adapter.normalize(vtodos, emptyIdMapping);
+      expect(tasks[0].title).toBe('Plan trip (updated)');
+      expect(tasks[0].dueDate).toBe('2026-12-01');
+      expect(tasks[0].priority).toBe('high');
+    });
+
+    it('strips PERCENT-COMPLETE:40 and sets 100 on completion, preserves X- properties', async () => {
+      const client = makeClient();
+      const adapter = new CalDAVAdapter(client);
+      await client.connect();
+
+      const uid = `e2e-jtx-complete-${Date.now()}`;
+      const jtxVTODO = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//jtx Board//EN',
+        'BEGIN:VTODO',
+        `UID:${uid}`,
+        'DTSTAMP:20250101T000000Z',
+        'SUMMARY:In progress task',
+        'STATUS:IN-PROCESS',
+        'PERCENT-COMPLETE:60',
+        'X-JTX-FOOBAR:preserved',
+        'END:VTODO',
+        'END:VCALENDAR',
+      ].join('\r\n');
+
+      await client.createVTODO(jtxVTODO, uid);
+
+      const completedTask: CommonTask = {
+        uid: 'obs-jtx-done',
+        title: 'In progress task',
+        status: 'DONE',
+        dueDate: null,
+        startDate: null,
+        scheduledDate: null,
+        completedDate: '2026-07-18',
+        priority: 'none',
+        tags: [],
+        recurrenceRule: '',
+        body: '',
+      };
+
+      const idMapping: IdMapping = {
+        taskIdToCaldavUid: { 'obs-jtx-done': uid },
+        caldavUidToTaskId: { [uid]: 'obs-jtx-done' },
+      };
+      await adapter.applyChanges([{ type: 'complete', task: completedTask }], idMapping);
+
+      const vtodos = await client.fetchVTODOs();
+      const rawData = vtodos[0].data;
+
+      expect(rawData).toContain('PERCENT-COMPLETE:100');
+      expect(rawData).not.toContain('PERCENT-COMPLETE:60');
+      expect(rawData).toContain('X-JTX-FOOBAR:preserved');
+      expect(rawData).toContain('STATUS:COMPLETED');
+    });
+
+    it('preserves TZID and time-of-day on DUE through an Obsidian date change', async () => {
+      const client = makeClient();
+      const adapter = new CalDAVAdapter(client);
+      await client.connect();
+
+      const uid = `e2e-jtx-datetime-${Date.now()}`;
+      const jtxVTODO = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//jtx Board//EN',
+        'BEGIN:VTODO',
+        `UID:${uid}`,
+        'DTSTAMP:20250101T000000Z',
+        'SUMMARY:Meeting prep',
+        'STATUS:IN-PROCESS',
+        'DUE;TZID=Europe/Berlin:20240115T140000',
+        'END:VTODO',
+        'END:VCALENDAR',
+      ].join('\r\n');
+
+      await client.createVTODO(jtxVTODO, uid);
+
+      const updatedTask: CommonTask = {
+        uid: 'obs-dt',
+        title: 'Meeting prep',
+        status: 'TODO',
+        dueDate: '2026-09-01',
+        startDate: null,
+        scheduledDate: null,
+        completedDate: null,
+        priority: 'none',
+        tags: [],
+        recurrenceRule: '',
+        body: '',
+      };
+
+      const idMapping: IdMapping = {
+        taskIdToCaldavUid: { 'obs-dt': uid },
+        caldavUidToTaskId: { [uid]: 'obs-dt' },
+      };
+      await adapter.applyChanges([{ type: 'update', task: updatedTask }], idMapping);
+
+      const vtodos = await client.fetchVTODOs();
+      const rawData = vtodos[0].data;
+
+      // Date updated; timezone and time-of-day must be preserved
+      expect(rawData).toMatch(/DUE;TZID=Europe\/Berlin:20260901T140000/);
+      expect(rawData).not.toMatch(/DUE;VALUE=DATE/);
+      // STATUS:IN-PROCESS must also survive
+      expect(rawData).toContain('STATUS:IN-PROCESS');
+    });
+  });
+
   describe('fetchTasks category filter', () => {
     it('pulls every server task when the category is empty (iOS Reminders case, issue #94)', async () => {
       const client = makeClient();

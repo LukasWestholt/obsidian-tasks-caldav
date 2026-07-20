@@ -74,7 +74,7 @@ describe('CalDAVAdapter', () => {
       expect(adapter.toCommonTask(done, 'id').status).toBe('DONE');
 
       const inProgress = makeCalObj('c-ip', 'In progress', ['STATUS:IN-PROCESS']);
-      expect(adapter.toCommonTask(inProgress, 'id').status).toBe('IN_PROGRESS');
+      expect(adapter.toCommonTask(inProgress, 'id').status).toBe('TODO'); // IN-PROCESS has no Obsidian equivalent
 
       const cancelled = makeCalObj('c-can', 'Cancelled', ['STATUS:CANCELLED']);
       expect(adapter.toCommonTask(cancelled, 'id').status).toBe('CANCELLED');
