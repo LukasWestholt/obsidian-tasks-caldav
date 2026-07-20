@@ -2,12 +2,12 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
-// One-command release. master is branch-protected (PR required, signed
+// One-command release. main is branch-protected (PR required, signed
 // commits, Copilot review) with no bypass, so this script never pushes
-// to master. It bumps the version files on a release/<version> branch,
+// to main. It bumps the version files on a release/<version> branch,
 // opens a PR, and enables auto-merge. The rest is fully in CI:
 //
-//   PR merges to master (GitHub signs the squash commit)
+//   PR merges to main (GitHub signs the squash commit)
 //     -> release-tag.yml sees the manifest.json version change,
 //        creates the GitHub release as a pre-release, and calls
 //        release.yml to build, attest, upload, and promote.
@@ -46,16 +46,16 @@ const fail = (message) => {
 	process.exit(1);
 };
 
-if (git('branch', '--show-current') !== 'master') {
-	fail('must be on master.');
+if (git('branch', '--show-current') !== 'main') {
+	fail('must be on main.');
 }
 if (git('status', '--porcelain', '--ignore-submodules')) {
 	fail('working tree is not clean. Commit or stash first.');
 }
 
-git('fetch', 'origin', 'master', '--quiet');
-if (git('rev-parse', 'HEAD') !== git('rev-parse', 'origin/master')) {
-	fail('local master is not in sync with origin/master. Reconcile (git pull / reset) before releasing.');
+git('fetch', 'origin', 'main', '--quiet');
+if (git('rev-parse', 'HEAD') !== git('rev-parse', 'origin/main')) {
+	fail('local main is not in sync with origin/main. Reconcile (git pull / reset) before releasing.');
 }
 
 try {
@@ -128,17 +128,17 @@ const prBody = isPrerelease
 
 const prUrl = execFileSync('gh', [
 	'pr', 'create',
-	'--base', 'master',
+	'--base', 'main',
 	'--head', branch,
 	'--title', `chore: release ${version}`,
 	'--body', prBody,
 ], { encoding: 'utf8' }).trim();
 
-git('checkout', 'master');
+git('checkout', 'main');
 
 let autoMerge = true;
 try {
-	// Squash so master gets a single GitHub-signed commit (required_signatures).
+	// Squash so main gets a single GitHub-signed commit (required_signatures).
 	execFileSync('gh', ['pr', 'merge', prUrl, '--auto', '--squash'], { stdio: 'inherit' });
 } catch {
 	autoMerge = false;
