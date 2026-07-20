@@ -44,6 +44,15 @@ Available in the [Obsidian community plugin directory](https://community.obsidia
 
 BRAT will also handle future updates automatically.
 
+#### Community fork (mailbox.org / Open-Xchange / jtx Board fixes)
+
+If you need fixes for mailbox.org, Open-Xchange, or jtx Board that have not yet landed in the upstream release, install the community fork instead:
+
+1. Install the [BRAT plugin](https://tfthacker.com/brat-quick-guide)
+2. Open BRAT settings → **Add Beta Plugin**
+3. Enter `LukasWestholt/obsidian-tasks-caldav` and click **Add Plugin**
+4. Enable "Tasks CalDAV Sync" in Settings → Community Plugins
+
 ### Manual
 
 1. Download `main.js`, `manifest.json`, and `styles.css` (if present) from the [latest release](https://github.com/josecoelho/obsidian-tasks-caldav/releases)
