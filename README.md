@@ -168,6 +168,8 @@ If your server tasks have no matching `CATEGORIES` (for example, tasks created f
 | Vikunja | Automated E2E suite |
 | Baïkal (SabreDAV) | Automated E2E suite |
 | Fastmail | Manually verified |
+| mailbox.org (Open-Xchange) | Manually verified |
+| jtx Board (Android) | Manually verified |
 
 Should work with any CalDAV server that supports VTODO, such as Synology.
 
